@@ -1,6 +1,6 @@
 ###### WIP Computer
 
-# Multi-Device Sync
+# Relay: Multi-Device Sync
 
 Memory Crystal works on one machine out of the box. Multi-device sync lets your agent's memory follow you across machines. Conversations captured on your laptop are available on your desktop and vice versa.
 
