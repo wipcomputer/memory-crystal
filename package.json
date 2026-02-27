@@ -1,0 +1,40 @@
+{
+  "name": "memory-crystal",
+  "version": "0.1.0",
+  "description": "Sovereign memory system — local-first with ephemeral encrypted relay. Your memory, your machine, your rules.",
+  "type": "module",
+  "main": "dist/core.js",
+  "openclaw": {
+    "extensions": [
+      "./dist/openclaw.js"
+    ]
+  },
+  "bin": {
+    "crystal": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsup src/core.ts src/cli.ts src/mcp-server.ts src/openclaw.ts src/migrate.ts src/cc-hook.ts src/crypto.ts src/poller.ts src/mirror-sync.ts src/ldm.ts src/summarize.ts --format esm --dts --outDir dist && tsup src/worker.ts --format esm --outDir dist --no-dts",
+    "build:local": "tsup src/core.ts src/cli.ts src/mcp-server.ts src/openclaw.ts src/migrate.ts src/cc-hook.ts src/crypto.ts src/poller.ts src/mirror-sync.ts src/ldm.ts src/summarize.ts --format esm --dts --outDir dist",
+    "build:worker": "tsup src/worker.ts --format esm --outDir dist --no-dts",
+    "dev": "tsup src/core.ts src/cli.ts src/mcp-server.ts src/openclaw.ts src/migrate.ts src/cc-hook.ts src/crypto.ts --format esm --watch --outDir dist",
+    "check": "node dist/cli.js status",
+    "search": "node dist/cli.js search",
+    "migrate": "node dist/migrate.js"
+  },
+  "dependencies": {
+    "@lancedb/lancedb": "^0.15.0",
+    "better-sqlite3": "^11.8.1",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "apache-arrow": "^18.1.0",
+    "sqlite-vec": "^0.1.7-alpha.2"
+  },
+  "optionalDependencies": {
+    "sqlite-vec-darwin-arm64": "^0.1.7-alpha.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0"
+  }
+}

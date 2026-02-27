@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.lance/
+*.db
+state.json
+sync-state.json
+logs/
+.DS_Store
+_git-ignore/

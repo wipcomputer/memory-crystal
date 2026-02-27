@@ -1,0 +1,11 @@
+{
+  "id": "memory-crystal",
+  "name": "Memory Crystal",
+  "description": "Sovereign memory system — search, remember, forget across all agent conversations and files.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
