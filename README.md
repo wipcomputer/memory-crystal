@@ -4,7 +4,7 @@
 
 # Memory Crystal
 
-## All your AI tools. One shared memory.
+## All your AI tools. One shared memory. Private, searchable, sovereign.
 
 Stop starting over. Memory Crystal lets all your AIs remember you ... together.
 
