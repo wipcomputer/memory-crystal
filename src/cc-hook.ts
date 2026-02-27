@@ -25,11 +25,11 @@ import {
 import { join, basename, dirname } from 'node:path';
 
 const HOME = process.env.HOME || '';
-const CC_AGENT_ID = process.env.CRYSTAL_AGENT_ID || 'claude-code';
+const CC_AGENT_ID = process.env.CRYSTAL_AGENT_ID || 'cc-mini';
 const RELAY_URL = process.env.CRYSTAL_RELAY_URL || '';
 const RELAY_TOKEN = process.env.CRYSTAL_RELAY_TOKEN || '';
 const OC_DIR = join(HOME, '.openclaw');
-const LDM_DAILY = join(HOME, '.ldm', 'agents', 'cc', 'memory', 'daily');
+const LDM_DAILY = join(HOME, '.ldm', 'agents', CC_AGENT_ID, 'memory', 'daily');
 const PRIVATE_MODE_PATH = join(OC_DIR, 'memory', 'memory-capture-state.json');
 const WATERMARK_PATH = join(OC_DIR, 'memory', 'cc-capture-watermark.json');
 const CC_ENABLED_PATH = join(OC_DIR, 'memory', 'cc-capture-enabled.json');
