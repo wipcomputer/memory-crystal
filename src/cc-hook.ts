@@ -435,18 +435,9 @@ async function main(): Promise<void> {
       writeSummaryFile(paths.sessions, summary, agentId, sessionId);
     } catch {} // Summary failure is non-fatal
 
-    // Auto dev updates (local mode only — Mini handles this)
-    if (mode === 'local') {
-      try {
-        const { runDevUpdate } = await import('./dev-update.js');
-        const result = runDevUpdate('cc');
-        if (result.reposUpdated > 0) {
-          process.stderr.write(`[cc-dev-update] wrote ${result.reposUpdated} dev updates\n`);
-        }
-      } catch (devErr: any) {
-        process.stderr.write(`[cc-dev-update] failed (non-fatal): ${devErr.message}\n`);
-      }
-    }
+    // Dev updates disabled (2026-02-28). Was auto-generating files in every repo's
+    // ai/ folder after each session. Created noise, not signal. If we bring this back,
+    // it should be opt-in per repo, not a blanket scan.
   } catch (err: any) {
     process.stderr.write(`[cc-memory-capture] error: ${err.message}\n`);
     process.exit(1);

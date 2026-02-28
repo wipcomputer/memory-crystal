@@ -1,6 +1,6 @@
 {
   "name": "memory-crystal",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Sovereign memory system — local-first with ephemeral encrypted relay. Your memory, your machine, your rules.",
   "type": "module",
   "main": "dist/core.js",
