@@ -2,7 +2,7 @@
 
 # Memory Crystal for Enterprise
 
-Agent memory infrastructure. Local-first. Encrypted. Inspectable.
+Agent memory infrastructure. Local-first. Encrypted. Inspectable. *In testing.*
 
 ## The Problem
 
@@ -32,11 +32,12 @@ sqlite-vec (vectors) + FTS5 (BM25) + SQLite (metadata)
     |-- cli.ts          -> crystal search "query"
     |-- mcp-server.ts   -> MCP protocol (any compatible client)
     |-- openclaw.ts     -> OpenClaw plugin
-    |-- cc-hook.ts      -> Claude Code hook (auto-capture)
+    |-- cc-poller.ts    -> Continuous capture (cron, primary)
+    |-- cc-hook.ts      -> Claude Code Stop hook (redundancy)
     +-- worker.ts       -> Encrypted relay (multi-site sync)
 ```
 
-One core module. Five interfaces. Every interface calls the same search engine. No inconsistency between access paths.
+One core module. Six interfaces. Every interface calls the same search engine. No inconsistency between access paths.
 
 ## Security Model
 
@@ -129,7 +130,7 @@ No migrations server. No schema versioning service. It's SQLite. `sqlite3 crysta
 
 | Platform | Integration | Auto-Capture |
 |----------|------------|-------------|
-| Claude Code | Stop hook (`cc-hook.ts`) | Yes. Every response. |
+| Claude Code | Cron poller (`cc-poller.ts`, primary) + Stop hook (`cc-hook.ts`, redundancy) | Yes. Every minute via cron, plus flush on session end. |
 | OpenClaw | Plugin (`openclaw.ts`) + `agent_end` hook | Yes. Every turn. |
 | Claude Desktop | MCP server (`mcp-server.ts`) | Search only. Manual capture. |
 | Any MCP client | MCP server | Search only. Manual capture. |
@@ -144,7 +145,7 @@ crystal init --agent your-agent-id
 crystal status
 ```
 
-For enterprise deployments across multiple machines, see [Multi-Device Sync](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md).
+For enterprise deployments across multiple machines, see [Relay: Multi-Device Sync](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md).
 
 For full technical details, see [Technical Documentation](https://github.com/wipcomputer/memory-crystal/blob/main/TECHNICAL.md).
 

@@ -1,7 +1,11 @@
 #!/usr/bin/env node
-// memory-crystal/cc-hook.ts — Claude Code Stop hook handler.
-// Triggered after every Claude Code response. Reads the session JSONL,
-// extracts new turns since last watermark.
+// memory-crystal/cc-hook.ts — Claude Code Stop hook (redundancy).
+// Runs as a Stop hook in Claude Code settings.json. Acts as a final flush
+// to catch anything the cron-based poller (cc-poller.ts) hasn't picked up yet.
+//
+// The cron job is the PRIMARY capture path (runs every minute).
+// This hook is the BACKUP. If the poller already captured everything,
+// this is a no-op (watermark is already current).
 //
 // Two modes:
 //   LOCAL:  Ingests directly into local crystal (Mini)
@@ -378,13 +382,12 @@ async function main(): Promise<void> {
   const wm = loadWatermark();
   const fileKey = transcriptPath;
 
-  // First time: seed watermark at current size (skip old history)
+  // First encounter: start from byte 0 (capture everything).
+  // The old behavior seeded at end-of-file, which SKIPPED all existing history.
+  // The cron poller is the primary path and always starts from 0.
+  // The Stop hook should match that behavior.
   if (!wm.files[fileKey]) {
-    const size = statSync(transcriptPath).size;
-    wm.files[fileKey] = { lastByteOffset: size, lastTimestamp: new Date().toISOString() };
-    saveWatermark(wm);
-    process.stderr.write(`[cc-memory-capture] seeded ${basename(transcriptPath)} at ${size} bytes\n`);
-    process.exit(0);
+    wm.files[fileKey] = { lastByteOffset: 0, lastTimestamp: new Date().toISOString() };
   }
 
   const lastOffset = wm.files[fileKey].lastByteOffset || 0;
@@ -398,8 +401,8 @@ async function main(): Promise<void> {
 
   const totalTokens = messages.reduce((sum, m) => sum + Math.ceil(m.text.length / 4), 0);
 
-  // Min threshold
-  if (totalTokens < 500) {
+  // Min threshold (matches poller)
+  if (totalTokens < 100) {
     wm.files[fileKey] = { lastByteOffset: newByteOffset, lastTimestamp: new Date().toISOString() };
     saveWatermark(wm);
     process.exit(0);

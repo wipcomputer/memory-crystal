@@ -44,6 +44,15 @@ Check memory crystal health — chunk count, agents, provider.
 crystal_status
 ```
 
+## Setup
+
+```bash
+crystal init                    # Scaffolds ~/.ldm/, deploys capture script, installs cron
+crystal init --agent cc-air     # Use a different agent ID
+```
+
+This creates the `~/.ldm/` directory tree, copies `crystal-capture.sh` to `~/.ldm/bin/`, and installs a cron job that captures conversations every minute. The Stop hook (`cc-hook.ts`) is optional redundancy.
+
 ## CLI (via bash)
 ```bash
 crystal search "query"
@@ -52,6 +61,7 @@ crystal remember "fact to store" --category preference
 crystal forget 42
 crystal status
 crystal status --provider ollama  # check with different provider
+crystal init                      # scaffold + deploy capture + install cron
 ```
 
 ## Tips
