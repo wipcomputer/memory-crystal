@@ -95,10 +95,13 @@ async function main() {
         if (results.length === 0) {
           console.log('No results found.');
         } else {
-          for (const r of results) {
+          const icon: Record<string, string> = { fresh: '🟢', recent: '🟡', aging: '🟠', stale: '🔴' };
+          console.log('(Recency-weighted. 🟢 fresh <3d, 🟡 recent <7d, 🟠 aging <14d, 🔴 stale 14d+)\n');
+          for (const [i, r] of results.entries()) {
             const score = (r.score * 100).toFixed(1);
             const date = r.created_at?.slice(0, 10) || 'unknown';
-            console.log(`[${score}%] [${r.agent_id}] [${date}] [${r.role}]`);
+            const fresh = r.freshness ? `${icon[r.freshness]} ${r.freshness}, ` : '';
+            console.log(`[${i + 1}] (${fresh}${score}% match, ${r.agent_id}, ${date}, ${r.role})`);
             console.log(r.text.slice(0, 300) + (r.text.length > 300 ? '...' : ''));
             console.log('---');
           }
