@@ -3,7 +3,7 @@
 // crystal search "query" | crystal remember "fact" | crystal forget <id> | crystal status
 
 import { Crystal, resolveConfig } from './core.js';
-import { scaffoldLdm, ldmPaths, ensureLdm, getAgentId } from './ldm.js';
+import { scaffoldLdm, ldmPaths, ensureLdm, getAgentId, deployCaptureScript, installCron } from './ldm.js';
 import { existsSync, copyFileSync, symlinkSync, lstatSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -20,6 +20,9 @@ Commands:
   crystal sources sync <name> [--dry-run]     Sync (re-index changed files)
   crystal sources status                      Show all indexed collections
   crystal sources remove <name>               Remove a collection
+
+  crystal pair                               Show QR code with relay key (generate if none)
+  crystal pair --code <string>               Accept a pairing code from another device
 
   crystal init [--agent <id>]                 Scaffold ~/.ldm/ directory tree
   crystal migrate-db                          Move crystal.db to ~/.ldm/memory/
@@ -57,6 +60,16 @@ async function main() {
   }
 
   // Commands that don't need Crystal: handle before init
+  if (command === 'pair') {
+    const { pairShow, pairReceive } = await import('./pair.js');
+    if (flags.code) {
+      pairReceive(flags.code);
+    } else {
+      await pairShow();
+    }
+    return;
+  }
+
   if (command === 'init' || command === 'migrate-db') {
     await handleLdmCommand(command, flags);
     return;
@@ -292,11 +305,29 @@ async function handleLdmCommand(command: string, flags: Record<string, string>):
     const paths = scaffoldLdm(agentId);
     console.log(`LDM scaffolded for agent "${agentId}"`);
     console.log(`  Root:         ${paths.root}`);
+    console.log(`  Bin:          ${paths.bin}`);
     console.log(`  Crystal DB:   ${paths.crystalDb}`);
     console.log(`  Transcripts:  ${paths.transcripts}`);
     console.log(`  Sessions:     ${paths.sessions}`);
     console.log(`  Daily:        ${paths.daily}`);
     console.log(`  Journals:     ${paths.journals}`);
+
+    // Deploy capture script to ~/.ldm/bin/
+    try {
+      const scriptPath = deployCaptureScript();
+      console.log(`  Capture:      ${scriptPath}`);
+    } catch (err: any) {
+      console.error(`  Capture:      FAILED (${err.message})`);
+    }
+
+    // Install cron job for continuous capture
+    try {
+      installCron();
+      console.log(`  Cron:         installed (every minute)`);
+    } catch (err: any) {
+      console.error(`  Cron:         FAILED (${err.message})`);
+    }
+
     return;
   }
 

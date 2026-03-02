@@ -104,6 +104,31 @@ export function encryptFile(filePath: string, masterKey: Buffer): EncryptedPaylo
   return encrypt(plaintext, masterKey);
 }
 
+// ── Pairing ──
+
+export const RELAY_KEY_PATH = KEY_PATH;
+
+export function generateRelayKey(): Buffer {
+  return randomBytes(32);
+}
+
+export function encodePairingString(key: Buffer): string {
+  if (key.length !== 32) throw new Error('Key must be 32 bytes');
+  return `mc1:${key.toString('base64')}`;
+}
+
+export function decodePairingString(str: string): Buffer {
+  const trimmed = str.trim();
+  if (!trimmed.startsWith('mc1:')) {
+    throw new Error('Invalid pairing string (expected mc1: prefix)');
+  }
+  const key = Buffer.from(trimmed.slice(4), 'base64');
+  if (key.length !== 32) {
+    throw new Error(`Invalid key length: expected 32 bytes, got ${key.length}`);
+  }
+  return key;
+}
+
 // ── Integrity hash for mirror snapshots ──
 
 import { createHash } from 'node:crypto';
