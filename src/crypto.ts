@@ -4,10 +4,9 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, hkdfSync } from 'node:crypto';
-import { join } from 'node:path';
+import { resolveSecretPath } from './ldm.js';
 
-const HOME = process.env.HOME || '';
-const KEY_PATH = process.env.CRYSTAL_RELAY_KEY_PATH || join(HOME, '.openclaw', 'secrets', 'crystal-relay-key');
+const KEY_PATH = process.env.CRYSTAL_RELAY_KEY_PATH || resolveSecretPath('crystal-relay-key');
 
 // ── Key Management ──
 

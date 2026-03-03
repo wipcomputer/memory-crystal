@@ -7,3 +7,4 @@ sync-state.json
 logs/
 .DS_Store
 _git-ignore/
+.wrangler/

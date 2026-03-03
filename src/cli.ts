@@ -3,9 +3,10 @@
 // crystal search "query" | crystal remember "fact" | crystal forget <id> | crystal status
 
 import { Crystal, resolveConfig } from './core.js';
-import { scaffoldLdm, ldmPaths, ensureLdm, getAgentId, deployCaptureScript, installCron } from './ldm.js';
+import { scaffoldLdm, ldmPaths, ensureLdm, getAgentId, deployCaptureScript, deployBackupScript, installCron, installBackupLaunchAgent } from './ldm.js';
 import { existsSync, copyFileSync, symlinkSync, lstatSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { execSync } from 'node:child_process';
 
 const USAGE = `
 crystal — Sovereign memory system
@@ -21,8 +22,20 @@ Commands:
   crystal sources status                      Show all indexed collections
   crystal sources remove <name>               Remove a collection
 
-  crystal pair                               Show QR code with relay key (generate if none)
-  crystal pair --code <string>               Accept a pairing code from another device
+  crystal role                                Show current role (Core/Node/Standalone)
+  crystal promote                             Promote this device to Crystal Core
+  crystal demote [--relay <url>]              Demote this device to Crystal Node
+  crystal doctor                              Full health check with fix suggestions
+
+  crystal backup                              Run a backup now
+  crystal backup setup                        Install daily backup (LaunchAgent, 03:00)
+  crystal backup --keep <n>                   Keep last n backups (default: 7)
+
+  crystal bridge setup                        Install + register Bridge MCP server
+  crystal bridge status                       Show Bridge install state
+
+  crystal pair                                Show QR code with relay key (generate if none)
+  crystal pair --code <string>                Accept a pairing code from another device
 
   crystal init [--agent <id>]                 Scaffold ~/.ldm/ directory tree
   crystal migrate-db                          Move crystal.db to ~/.ldm/memory/
@@ -66,6 +79,139 @@ async function main() {
       pairReceive(flags.code);
     } else {
       await pairShow();
+    }
+    return;
+  }
+
+  // ── Role commands (no Crystal init needed) ──
+
+  if (command === 'role') {
+    const { detectRole } = await import('./role.js');
+    const info = detectRole();
+    console.log(`Crystal Role`);
+    console.log(`  Role:        ${info.role} (${info.source})`);
+    console.log(`  Agent ID:    ${info.agentId}`);
+    console.log(`  Local DB:    ${info.hasLocalDb ? 'yes' : 'no'}`);
+    console.log(`  Embeddings:  ${info.hasLocalEmbeddings ? 'yes (local)' : 'no (relay only)'}`);
+    if (info.relayUrl) {
+      console.log(`  Relay URL:   ${info.relayUrl}`);
+      console.log(`  Relay token: ${info.relayToken ? 'set' : 'NOT SET'}`);
+      console.log(`  Relay key:   ${info.relayKeyExists ? 'present' : 'NOT FOUND'}`);
+    }
+    return;
+  }
+
+  if (command === 'promote') {
+    const { promoteToCore, detectRole } = await import('./role.js');
+    promoteToCore();
+    const info = detectRole();
+    console.log('This device is now Crystal Core.');
+    console.log('All embeddings will be generated locally.');
+    console.log(`Database: ${info.hasLocalDb ? 'found' : 'will be created on next ingest'}`);
+    return;
+  }
+
+  if (command === 'demote') {
+    const { demoteToNode, detectRole } = await import('./role.js');
+    const relayUrl = flags.relay || positional[0];
+    demoteToNode(relayUrl);
+    console.log('This device is now Crystal Node.');
+    console.log('Conversations will be relayed to the Core for embedding.');
+    if (relayUrl) {
+      console.log(`Relay URL: ${relayUrl}`);
+    } else {
+      console.log('Set CRYSTAL_RELAY_URL in your shell profile to enable relay.');
+    }
+    return;
+  }
+
+  // ── Doctor (no Crystal init needed) ──
+
+  if (command === 'doctor') {
+    const { runDoctor } = await import('./doctor.js');
+    const checks = await runDoctor();
+    const icons: Record<string, string> = { ok: 'OK', warn: '!!', fail: 'XX' };
+    console.log('Crystal Doctor\n');
+    for (const check of checks) {
+      console.log(`  [${icons[check.status]}] ${check.name}: ${check.detail}`);
+      if (check.fix && check.status !== 'ok') {
+        console.log(`       Fix: ${check.fix}`);
+      }
+    }
+    const fails = checks.filter(c => c.status === 'fail').length;
+    const warns = checks.filter(c => c.status === 'warn').length;
+    console.log(`\n${fails === 0 && warns === 0 ? 'All checks passed.' : `${fails} failures, ${warns} warnings.`}`);
+    return;
+  }
+
+  // ── Backup (no Crystal init needed) ──
+
+  if (command === 'backup') {
+    const subCmd = positional[0];
+    if (subCmd === 'setup') {
+      try {
+        deployBackupScript();
+        const plistPath = installBackupLaunchAgent();
+        console.log('Backup LaunchAgent installed.');
+        console.log(`  Runs daily at 03:00`);
+        console.log(`  Plist: ${plistPath}`);
+        console.log(`  Log: /tmp/ldm-dev-tools/ldm-backup.log`);
+      } catch (err: any) {
+        console.error(`Setup failed: ${err.message}`);
+        process.exit(1);
+      }
+    } else {
+      // Run backup now
+      const paths = ldmPaths();
+      const scriptPath = join(paths.bin, 'ldm-backup.sh');
+      if (!existsSync(scriptPath)) {
+        console.error(`Backup script not found. Run "crystal init" first.`);
+        process.exit(1);
+      }
+      const keepFlag = flags.keep ? `--keep ${flags.keep}` : '';
+      const secretsFlag = 'include-secrets' in flags ? '--include-secrets' : '';
+      try {
+        execSync(`bash ${scriptPath} ${keepFlag} ${secretsFlag}`.trim(), { stdio: 'inherit' });
+      } catch (err: any) {
+        process.exit(1);
+      }
+    }
+    return;
+  }
+
+  // ── Bridge (no Crystal init needed) ──
+
+  if (command === 'bridge') {
+    const { isBridgeInstalled, isBridgeRegistered, registerBridgeMcp, registerBridgeDesktop, isBridgeDesktopRegistered } = await import('./bridge.js');
+    const subCmd = positional[0] || 'status';
+
+    if (subCmd === 'setup') {
+      if (!isBridgeInstalled()) {
+        console.log('Bridge (lesa-bridge) is not installed.');
+        console.log('Install it first: npm install -g lesa-bridge');
+        process.exit(1);
+      }
+      if (!isBridgeRegistered()) {
+        try {
+          registerBridgeMcp();
+          console.log('Bridge registered with Claude Code CLI.');
+        } catch (err: any) {
+          console.error(`Claude Code registration failed: ${err.message}`);
+        }
+      } else {
+        console.log('Bridge already registered with Claude Code CLI.');
+      }
+      if (!isBridgeDesktopRegistered()) {
+        const ok = registerBridgeDesktop();
+        if (ok) console.log('Bridge registered with Claude Desktop.');
+      }
+      console.log('Done. Restart Claude Code to activate.');
+    } else {
+      // status
+      console.log('Bridge Status');
+      console.log(`  Installed:    ${isBridgeInstalled() ? 'yes' : 'no'}`);
+      console.log(`  Claude Code:  ${isBridgeRegistered() ? 'registered' : 'not registered'}`);
+      console.log(`  Desktop:      ${isBridgeDesktopRegistered() ? 'registered' : 'not registered'}`);
     }
     return;
   }
@@ -330,6 +476,26 @@ async function handleLdmCommand(command: string, flags: Record<string, string>):
     } catch (err: any) {
       console.error(`  Cron:         FAILED (${err.message})`);
     }
+
+    // Deploy backup script to ~/.ldm/bin/
+    try {
+      const backupPath = deployBackupScript();
+      console.log(`  Backup:       ${backupPath}`);
+    } catch (err: any) {
+      console.error(`  Backup:       FAILED (${err.message})`);
+    }
+
+    // Check bridge status
+    try {
+      const { isBridgeInstalled, isBridgeRegistered } = await import('./bridge.js');
+      if (isBridgeInstalled() && !isBridgeRegistered()) {
+        console.log(`  Bridge:       found but not registered. Run "crystal bridge setup" to connect.`);
+      } else if (!isBridgeInstalled()) {
+        console.log(`  Bridge:       not installed. Run "npm install -g lesa-bridge && crystal bridge setup" to enable AI-to-AI communication.`);
+      } else {
+        console.log(`  Bridge:       registered`);
+      }
+    } catch {}
 
     return;
   }

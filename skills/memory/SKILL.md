@@ -1,7 +1,7 @@
 ---
 name: memory
 description: Search and manage the shared memory crystal. Use when user says "do you remember", "search memory", "remember this", "forget that", "memory status", "what do you know about", or needs to recall past discussions, store facts, or check what's in memory.
-version: 0.3.1
+version: 0.4.0
 ---
 
 # Memory Crystal
@@ -24,17 +24,71 @@ After install, the AI remembers everything. Past conversations are searchable. I
 
 ## Install
 
-**You are an AI agent helping a user install Memory Crystal. Follow these steps exactly. The user should not need to do anything technical. You do it all.**
+**You are an AI agent helping a user install Memory Crystal. Walk them through the process step by step. Ask questions, explain what you're doing, and let them make choices.**
 
-### Step 1: Install the package
+### Question 1: Developer or end user?
 
-Run this:
+Ask the user:
+
+> "Are you installing this as a developer, or do you just want it to work?"
+
+**Developer path:**
+- Fork the repo so they can contribute back
+- Clone locally, build from source
+- They end up with `crystal` and `crystal-mcp` on PATH via `npm link`
+
+```bash
+git clone https://github.com/<their-fork>/memory-crystal.git
+cd memory-crystal
+npm install
+npm run build
+npm link
+```
+
+**End user path:**
+- One command, done
 
 ```bash
 npm install -g memory-crystal
 ```
 
 If npm is not available, check if the user has Node.js installed (`node --version`). They need Node.js 20+. If not installed, tell them to install it from https://nodejs.org first.
+
+Both paths end with `crystal` and `crystal-mcp` on PATH.
+
+### Question 2: First install or adding a device?
+
+Ask the user:
+
+> "Is this your first time installing Memory Crystal, or do you already have it on another machine?"
+
+**First install:** Full setup. This machine becomes the source of truth. Continue to Step 1.
+
+**Adding a device:** They already have a Crystal Core somewhere. Skip to "Adding a Device" below.
+
+### Transparency: Tell the user what's about to happen
+
+Before installing, explain exactly what will be created:
+
+> "Here's what Memory Crystal will set up on your machine:
+>
+> - `~/.ldm/` ... a hidden folder in your home directory. This is where everything lives.
+> - `~/.ldm/memory/crystal.db` ... your memory database. All conversations, all memories.
+> - `~/.ldm/agents/` ... per-agent data (transcripts, daily logs, sessions)
+> - `~/.ldm/bin/crystal-capture.sh` ... a script that captures conversations every minute via cron
+> - `~/.ldm/bin/ldm-backup.sh` ... a backup script (optional daily schedule)
+>
+> Nothing gets installed outside this folder. Nothing phones home. Want me to go ahead?"
+
+### Step 1: Initialize
+
+```bash
+crystal init
+```
+
+This scaffolds `~/.ldm/`, deploys the capture and backup scripts, and installs a cron job. Safe to run multiple times.
+
+**Core recommendation:** If this machine is always on (desktop, server, Mac mini), it should be your Crystal Core. The Core is the master memory. It does all embeddings and is the source of truth. If you're on a laptop, you can still install standalone. But when you're ready, you'll want a Core running on something permanent.
 
 ### Step 2: Set up embeddings
 
@@ -44,7 +98,7 @@ Memory Crystal needs an embedding provider to make conversations searchable. Che
 echo $OPENAI_API_KEY
 ```
 
-If that returns a key, you're good. Skip to Step 3.
+If that returns a key, skip to Step 3.
 
 If not, ask the user which provider they want:
 
@@ -57,9 +111,8 @@ They get the key from https://platform.openai.com/api-keys
 
 **Option B: Ollama (free, local, no API key needed)**
 ```bash
-# Check if Ollama is installed
 ollama --version
-# If not, tell them: https://ollama.com
+# If not installed: https://ollama.com
 ollama pull nomic-embed-text
 ```
 Then add to shell profile:
@@ -75,7 +128,7 @@ export GOOGLE_API_KEY="..."
 
 ### Step 3: Connect to your AI
 
-**Detect what the user is running and install for all of them.** Check for each:
+**Detect what the user is running and install for ALL of them.** Check for each:
 
 #### Claude Code CLI
 
@@ -128,31 +181,148 @@ openclaw gateway restart
 
 **Important: if you detect multiple runtimes, install for ALL of them.** They share the same database. Tell the user: "I found Claude Code and OpenClaw on your system. I'm installing Memory Crystal for both so all your AIs share the same memory."
 
-### Step 4: Initialize
+### Step 4: Bridge (AI-to-AI Communication)
+
+Memory Crystal includes Bridge, which lets your AIs talk to each other. Install it:
 
 ```bash
-crystal init
+crystal bridge setup
 ```
 
-This scaffolds the `~/.ldm/` directory, deploys the capture script, and installs a cron job that captures conversations every minute. Safe to run multiple times.
-
-### Step 5: Verify
-
-Run `crystal_status` (if you have the MCP tool) or:
+If Bridge isn't installed yet:
 
 ```bash
-crystal status
+npm install -g lesa-bridge
+crystal bridge setup
 ```
 
-It should show the data directory, provider, and chunk count. If chunks are 0, that's normal for a fresh install. They appear within a minute.
+This registers the Bridge MCP server. Your AIs can now send messages to each other and search each other's conversations.
 
-Test search:
+### Step 5: Backups (optional)
+
+Offer to set up automated backups:
+
+> "Want me to set up daily backups of your memory? I'll install a backup that runs at 3 AM and keeps the last 7 copies."
+
+```bash
+crystal backup setup
+```
+
+The backup destination defaults to `~/.ldm/backups/`. The user can change this by setting `LDM_BACKUP_DIR` in their shell profile to wherever they trust: iCloud Drive, an external drive, Dropbox, etc.
+
+**If the Core is on a laptop:** Strongly recommend backups. Laptops get lost, stolen, spilled on. The Core is the source of truth. Back it up.
+
+### Step 6: Verify
+
+Run `crystal doctor` to check that everything is set up correctly:
+
+```bash
+crystal doctor
+```
+
+This shows the status of every component: database, embeddings, capture, relay, MCP, backup, bridge. If anything is wrong, it tells you how to fix it.
+
+Then test search:
 
 ```bash
 crystal search "test"
 ```
 
 If that works, tell the user: "Memory Crystal is installed. From now on, I can search our past conversations, remember important things, and share memory with your other AI tools. Try asking me 'do you remember what we talked about last week?'"
+
+---
+
+## Adding a Device
+
+If the user already has a Crystal Core on another machine:
+
+### Step 1: Install the package
+
+Same as above (developer fork or `npm install -g memory-crystal`).
+
+### Step 2: Initialize as a Node
+
+```bash
+crystal init --agent <name>
+```
+
+Use a descriptive agent name like `cc-air`, `cc-laptop`, etc.
+
+### Step 3: Pair with the Core
+
+On the Core machine:
+```bash
+crystal pair
+```
+This shows a QR code and a pairing string.
+
+On this machine:
+```bash
+crystal pair --code mc1:...
+```
+
+Both machines now share the encryption key.
+
+### Step 4: Configure relay
+
+Ask the user: "Do you want to use the free WIP.computer relay, or set up your own?"
+
+**Option A: WIP.computer relay (recommended)**
+- Free during beta. Nothing to set up
+- Your data is end-to-end encrypted. The relay is blind
+- Set env vars:
+```bash
+export CRYSTAL_RELAY_URL=<provided-url>
+export CRYSTAL_RELAY_TOKEN=<provided-token>
+export CRYSTAL_AGENT_ID=<agent-name>
+```
+
+**Option B: Self-hosted relay (full sovereignty)**
+- Deploy your own Cloudflare Worker + R2 bucket
+- Requires a Cloudflare account (free tier works)
+- Walk them through the setup in RELAY.md
+
+### Step 5: Connect to AI + Bridge + Verify
+
+Same as first install Steps 3-6 above.
+
+### Step 6: Demote to Node
+
+```bash
+crystal demote
+```
+
+This machine is now a Crystal Node. Conversations are captured, encrypted, and relayed to the Core. The Core embeds everything and pushes a searchable mirror back.
+
+---
+
+## Role Management
+
+Users can check and change roles at any time:
+
+```bash
+crystal role              # Show current role
+crystal promote           # Make this device the Crystal Core
+crystal demote            # Make this device a Crystal Node
+```
+
+If a user starts on a laptop and later gets a desktop, they can promote the desktop and demote the laptop. No data loss.
+
+---
+
+## Coming Back Later
+
+Users can always come back and say:
+
+> "Hey, can you check what Memory Crystal features I have installed and what I'm missing?"
+
+Run:
+
+```bash
+crystal doctor
+```
+
+This shows the full state of the install: role, database, embeddings, capture, relay, MCP, backup, bridge. Each check shows OK, WARN, or FAIL with a suggested fix.
 
 ---
 
@@ -170,10 +340,10 @@ crystal_search query="user preferences" agent_id="main"
 ```
 
 Results are ranked by relevance and freshness, with color-coded freshness indicators:
-- 🟢 fresh (less than 3 days)
-- 🟡 recent (less than 7 days)
-- 🟠 aging (less than 14 days)
-- 🔴 stale (14+ days)
+- fresh (less than 3 days)
+- recent (less than 7 days)
+- aging (less than 14 days)
+- stale (14+ days)
 
 ### crystal_remember
 
@@ -212,3 +382,4 @@ crystal_status
 - The cron job captures conversations every minute. No data loss even in long sessions.
 - Available providers: openai (default), ollama (local, free), google.
 - All runtimes (Claude Code, Claude Desktop, OpenClaw) share the same database at `~/.ldm/memory/crystal.db`.
+- Run `crystal doctor` anytime to check what's installed and what's missing.

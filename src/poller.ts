@@ -12,16 +12,14 @@
 
 import { Crystal, resolveConfig, type Chunk } from './core.js';
 import { loadRelayKey, decryptJSON, encrypt, hashBuffer, type EncryptedPayload } from './crypto.js';
-import { ensureLdm, ldmPaths } from './ldm.js';
+import { ensureLdm, ldmPaths, resolveStatePath, stateWritePath } from './ldm.js';
 import { generateSessionSummary, writeSummaryFile, type SummaryMessage } from './summarize.js';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
-const HOME = process.env.HOME || '';
 const RELAY_URL = process.env.CRYSTAL_RELAY_URL || '';
 const RELAY_TOKEN = process.env.CRYSTAL_RELAY_TOKEN || '';
-const OC_DIR = join(HOME, '.openclaw');
-const POLLER_STATE_PATH = join(OC_DIR, 'memory', 'relay-poller-state.json');
+const POLLER_STATE_PATH = resolveStatePath('relay-poller-state.json');
 
 interface PollerState {
   lastPoll: string | null;
@@ -39,9 +37,8 @@ function loadState(): PollerState {
 }
 
 function saveState(state: PollerState): void {
-  const dir = dirname(POLLER_STATE_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(POLLER_STATE_PATH, JSON.stringify(state, null, 2));
+  const writePath = stateWritePath('relay-poller-state.json');
+  writeFileSync(writePath, JSON.stringify(state, null, 2));
 }
 
 // ── Relay message types ──
@@ -226,7 +223,7 @@ async function pushMirror(): Promise<void> {
   const relayKey = loadRelayKey();
   const config = resolveConfig();
   const paths = ldmPaths();
-  const dbPath = existsSync(paths.crystalDb) ? paths.crystalDb : join(config.dataDir || join(OC_DIR, 'memory-crystal'), 'crystal.db');
+  const dbPath = existsSync(paths.crystalDb) ? paths.crystalDb : join(config.dataDir, 'crystal.db');
 
   if (!existsSync(dbPath)) {
     throw new Error(`Crystal DB not found at ${dbPath}`);

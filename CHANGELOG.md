@@ -4,6 +4,11 @@
 
 
 
+
+## 0.4.1 (2026-03-03)
+
+Crystal Core/Node architecture, crystal doctor, crystal backup, crystal bridge, SKILL.md onboarding rewrite
+
 ## 0.3.3 (2026-03-02)
 
 Fix bin entries: crystal and crystal-mcp commands were missing from v0.3.2 due to npm stripping ./ prefix paths

@@ -6,11 +6,11 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Crystal, RemoteCrystal, resolveConfig, createCrystal } from './core.js';
+import { resolveStatePath, stateWritePath } from './ldm.js';
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-const CONFIG_DIR = join(process.env.HOME || '', '.openclaw');
-const PRIVATE_MODE_PATH = join(CONFIG_DIR, 'memory', 'memory-capture-state.json');
+const PRIVATE_MODE_PATH = resolveStatePath('memory-capture-state.json');
 
 function isPrivateMode(): boolean {
   try {
@@ -22,11 +22,10 @@ function isPrivateMode(): boolean {
   return false;
 }
 
-const METRICS_PATH = join(CONFIG_DIR, 'memory', 'search-metrics.jsonl');
+const METRICS_PATH = stateWritePath('search-metrics.jsonl');
 
 function logSearchMetric(tool: string, query: string, resultCount: number) {
   try {
-    mkdirSync(join(CONFIG_DIR, 'memory'), { recursive: true });
     const entry = JSON.stringify({
       ts: new Date().toISOString(),
       tool,

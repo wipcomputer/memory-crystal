@@ -75,9 +75,9 @@ Memory Crystal runs a remote MCP server (`worker-mcp.ts`) on Cloudflare Workers.
 
 Four tools: `memory_search`, `memory_remember`, `memory_forget`, `memory_status`.
 
-**Tier 1 (Sovereign):** Memories are encrypted and relayed to your home machine. No cloud search. The cloud MCP tells the client "search is available on your local devices."
+**Tier 1 (Sovereign):** Memories are encrypted and relayed to your Crystal Core. No cloud search. The cloud MCP tells the client "search is available on your local devices."
 
-**Tier 2 (Convenience):** Memories are stored in D1 + Vectorize for cloud search. Same hybrid search algorithm as local Crystal (BM25 + vector + RRF). Your home machine is still the source of truth.
+**Tier 2 (Convenience):** Memories are stored in D1 + Vectorize for cloud search. Same hybrid search algorithm as local Crystal (BM25 + vector + RRF). Your Crystal Core is still the source of truth.
 
 **Source:** `src/worker-mcp.ts` (OAuth + MCP server), `src/cloud-crystal.ts` (D1 + Vectorize backend)
 
@@ -88,6 +88,24 @@ Any tool that can run shell commands or call an MCP server can use Memory Crysta
 - **MCP Server** ... `mcp-server.ts` exposes `crystal_search`, `crystal_remember`, `crystal_forget`, `crystal_status`, `crystal_sources_add`, `crystal_sources_sync`, `crystal_sources_status`. Works with Claude Desktop, Claude Code, or any MCP-compatible client.
 - **CLI** ... `crystal search "query"` from any terminal. Any tool with shell access can call it.
 - **Module** ... `import { MemoryCrystal } from 'memory-crystal'` for Node.js integration.
+
+## Crystal Core and Crystal Node
+
+Memory Crystal uses a Core/Node architecture for multi-device setups:
+
+- **Crystal Core** ... your master memory. All conversations, all embeddings, all memories. This is the database you cannot lose. Install it on something permanent: a desktop, a home server, a Mac mini
+- **Crystal Node** ... a synced copy on any other device. Captures conversations, sends them to the Core via encrypted relay. Gets a mirror back for local search. If a node dies, nothing is lost. The Core has everything
+
+One Core, many Nodes. The Core does embeddings. Nodes just capture and sync.
+
+**Role management:**
+- `crystal role` ... show current role (Core or Node) and what it's connected to
+- `crystal promote` ... make this machine the Crystal Core
+- `crystal demote` ... make this machine a Crystal Node (connects to an existing Core)
+
+You can move the Core later. Start on a laptop, get a desktop, run `crystal promote` on the desktop. The old Core becomes a Node. No data loss.
+
+**If you install the Core on a laptop:** set up automated backups. iCloud Drive, external drive, wherever you trust. Your Core is your memory. Back it up.
 
 ## Architecture
 
@@ -111,7 +129,7 @@ Cloud:
 
 Relay:
       worker.ts             -> Encrypted dead drop (R2)
-      poller.ts             -> Home machine pickup
+      poller.ts             -> Crystal Core pickup
       mirror-sync.ts        -> DB mirror to devices
       crypto.ts             -> AES-256-GCM + HMAC-SHA256
 ```
@@ -229,21 +247,21 @@ The same encryption key must be present on all devices. Options:
 
 ### Relay Architecture
 
-1. **Device side** (`cc-hook.ts` relay mode): Encrypts JSONL with AES-256-GCM, signs with HMAC-SHA256, drops at Cloudflare Worker
+1. **Crystal Node** (`cc-hook.ts` relay mode): Encrypts JSONL with AES-256-GCM, signs with HMAC-SHA256, drops at Cloudflare Worker
 2. **Worker** (`worker.ts`): Stores encrypted blobs in R2. Pure dead drop. No decryption. Auto-cleans after 24h.
-3. **Home machine** (`poller.ts`): Polls Worker, downloads blobs, verifies HMAC, decrypts, ingests into crystal.db. Reconstructs remote agent's file tree (JSONL, MD summary, daily breadcrumb).
-4. **Mirror sync** (`mirror-sync.ts`): Pushes encrypted crystal.db snapshot from home machine to relay. Devices pull and decrypt for local search.
+3. **Crystal Core** (`poller.ts`): Polls Worker, downloads blobs, verifies HMAC, decrypts, ingests into crystal.db. Reconstructs remote agent's file tree (JSONL, MD summary, daily breadcrumb).
+4. **Mirror sync** (`mirror-sync.ts`): Pushes encrypted crystal.db snapshot from Crystal Core to relay. Crystal Nodes pull and decrypt for local search.
 
 ### Cloud Memory & Search Architecture
 
 1. **Client** (ChatGPT/Claude): Connects via OAuth 2.1 (DCR + PKCE S256)
 2. **Worker** (`worker-mcp.ts`): Authenticates, routes MCP JSON-RPC to tool handlers
 3. **Backend** (`cloud-crystal.ts`): D1 for SQL + FTS5, Vectorize for vectors, RRF fusion
-4. **Relay bridge** (Tier 1): Encrypts and drops to R2 for home machine pickup
+4. **Relay bridge** (Tier 1): Encrypts and drops to R2 for Crystal Core pickup
 
 Two one-way roads:
-- **Device -> Home machine** ... encrypted conversation chunks (ephemeral)
-- **Home machine -> Devices** ... search-ready DB snapshot
+- **Crystal Node -> Crystal Core** ... encrypted conversation chunks (ephemeral)
+- **Crystal Core -> Crystal Nodes** ... search-ready DB snapshot
 
 ## Session Summaries
 
@@ -306,7 +324,7 @@ Incremental sync detects changed files via SHA-256 content hashing. Only re-embe
 
 1. Explicit override (programmatic)
 2. `process.env` (set by plugin or manually)
-3. `.env` file (`~/.openclaw/memory-crystal/.env`)
+3. `.env` file (`~/.ldm/memory/.env`)
 4. 1Password CLI fallback
 
 ## CLI Reference
@@ -334,6 +352,11 @@ crystal pair --code mc1:<base64>      # Receive key from another device
 # LDM management
 crystal init [--agent <id>]
 crystal migrate-db
+
+# Crystal Core / Node management
+crystal role                          # Show current role (Core or Node) and connections
+crystal promote                       # Make this machine the Crystal Core
+crystal demote                        # Make this machine a Crystal Node
 ```
 
 ## MCP Tools
@@ -392,7 +415,7 @@ memory-crystal/
     worker.ts         Cloudflare Worker relay (encrypted dead drop, R2)
     worker-mcp.ts     Cloud MCP server (OAuth 2.1 + DCR, ChatGPT/Claude)
     cloud-crystal.ts  D1 + Vectorize backend (cloud search)
-    poller.ts         Relay poller (home machine side)
+    poller.ts         Relay poller (Crystal Core side)
     mirror-sync.ts    DB mirror sync (device side)
     migrate.ts        Legacy migration tools
     dev-update.ts     Auto dev-update generation

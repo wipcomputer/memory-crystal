@@ -4,11 +4,10 @@
 
 import { Crystal, resolveConfig, type Chunk } from './core.js';
 import { runDevUpdate } from './dev-update.js';
+import { resolveStatePath } from './ldm.js';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-const CONFIG_DIR = join(process.env.HOME || '', '.openclaw');
-const PRIVATE_MODE_PATH = join(CONFIG_DIR, 'memory', 'memory-capture-state.json');
+const PRIVATE_MODE_PATH = resolveStatePath('memory-capture-state.json');
 
 function isPrivateMode(): boolean {
   try {

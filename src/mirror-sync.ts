@@ -9,18 +9,16 @@
 //   node mirror-sync.js --force      Pull even if current mirror is recent
 
 import { loadRelayKey, decrypt, decryptJSON, hashBuffer, type EncryptedPayload } from './crypto.js';
-import { ldmPaths } from './ldm.js';
+import { ldmPaths, resolveStatePath, stateWritePath } from './ldm.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
-const HOME = process.env.HOME || '';
 const RELAY_URL = process.env.CRYSTAL_RELAY_URL || '';
 const RELAY_TOKEN = process.env.CRYSTAL_RELAY_TOKEN || '';
-const OC_DIR = join(HOME, '.openclaw');
 const _ldmPaths = ldmPaths();
 const MIRROR_DIR = join(_ldmPaths.root, 'memory');
 const MIRROR_DB_PATH = _ldmPaths.crystalDb;
-const MIRROR_STATE_PATH = join(OC_DIR, 'memory', 'mirror-sync-state.json');
+const MIRROR_STATE_PATH = resolveStatePath('mirror-sync-state.json');
 
 interface MirrorState {
   lastSync: string | null;
@@ -38,9 +36,8 @@ function loadState(): MirrorState {
 }
 
 function saveState(state: MirrorState): void {
-  const dir = dirname(MIRROR_STATE_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(MIRROR_STATE_PATH, JSON.stringify(state, null, 2));
+  const writePath = stateWritePath('mirror-sync-state.json');
+  writeFileSync(writePath, JSON.stringify(state, null, 2));
 }
 
 // ── Pull mirror ──

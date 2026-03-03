@@ -39,12 +39,15 @@ Your agent will read the repo, explain everything, and walk you through setup in
 
 **Local Memory**
 - Your AIs remember you. Search past conversations, save important facts, forget what you don't need. Your complete memory. It stays with you, not locked inside one platform
-- *Works with:* Claude Code CLI, OpenClaw, Claude Desktop, and any MCP-compatible client
 - *In production*
+  - *Tested:* Claude Code CLI + OpenClaw
+  - *Untested:* Other MCP-compatible clients and CLIs
 
 **Multi-Device Sync**
 - AIs on different machines and different networks relay their memories back to your local database. End-to-end encrypted. Searchable only from your local machine or private infrastructure
-- Uses Cloudflare infrastructure to transfer encrypted data between your devices. Currently free for individual use
+- Uses Cloudflare infrastructure to transfer encrypted data between your devices
+  - *Hosted:* Use WIP.computer relay infrastructure. Currently free for individual use
+  - *Self-hosted:* Deploy your own relay on your own Cloudflare account. Full sovereignty
 - Read more about [**Relay: Multi-Device Sync**](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md)
 - *In testing*
 
@@ -55,17 +58,23 @@ Your agent will read the repo, explain everything, and walk you through setup in
 - *In testing*
 
 **Import Memories**
-- **Total Recall** ... Connect your AI accounts (Anthropic, OpenAI, xAI/Grok). Every conversation gets pulled and run through the **Dream Weaver Protocol**, consolidating them into **Memory Crystal** as truly lived, searchable memories.
+- **Total Recall** ... Connect your AI accounts (Anthropic, OpenAI, xAI/Grok). Every conversation gets pulled and run through the **Dream Weaver Protocol**, consolidating them into **Memory Crystal** as truly lived, searchable memories
 - *In testing*
 
 **Memory Consolidation**
 - [**Dream Weaver Protocol**](https://github.com/wipcomputer/dream-weaver-protocol) ... Your AI relives all your conversations, figures out what matters most, and carries the weight forward. Like dreaming, the AI consolidates memories for better understanding. Read the paper: [Dream Weaver Protocol PDF](https://github.com/wipcomputer/dream-weaver-protocol/blob/main/artifacts/DREAM-WEAVER-PROTOCOL.pdf)
 - *In production*
+  - Compatible with all installations of Memory Crystal
 
 **AI-to-AI Communication**
 - Your AIs talk to each other on the same machine or any network machine. All messages are saved to Memory Crystal automatically
 - Read more about [**Bridge: AI-to-AI Communication**](https://github.com/wipcomputer/wip-bridge)
-- *Works with:* Claude Code CLI, OpenClaw TUI on the same device. Network devices in testing
+- *In testing*
+  - *Works with:* Claude Code CLI + OpenClaw on the same device
+  - *Network devices:* In testing
+
+**Backups**
+- Automated backups of all of your memories to a directory and location of your choosing: iCloud, external drive, Dropbox, or wherever you trust
 - *In testing*
 
 ## More Info

@@ -18,7 +18,7 @@
 //   node cc-poller.js --watch        Run continuously (poll every 30 sec)
 
 import { Crystal, resolveConfig, createCrystal, type Chunk, type CrystalConfig } from './core.js';
-import { ensureLdm, ldmPaths } from './ldm.js';
+import { ensureLdm, ldmPaths, resolveStatePath, stateWritePath } from './ldm.js';
 import {
   readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync,
   statSync, openSync, readSync, closeSync, copyFileSync, readdirSync,
@@ -27,13 +27,12 @@ import { join, basename, dirname } from 'node:path';
 
 const HOME = process.env.HOME || '';
 const CC_AGENT_ID = process.env.CRYSTAL_AGENT_ID || 'cc-mini';
-const OC_DIR = join(HOME, '.openclaw');
-const PRIVATE_MODE_PATH = join(OC_DIR, 'memory', 'memory-capture-state.json');
-const WATERMARK_PATH = join(OC_DIR, 'memory', 'cc-capture-watermark.json');
-const CC_ENABLED_PATH = join(OC_DIR, 'memory', 'cc-capture-enabled.json');
+const PRIVATE_MODE_PATH = resolveStatePath('memory-capture-state.json');
+const WATERMARK_PATH = resolveStatePath('cc-capture-watermark.json');
+const CC_ENABLED_PATH = resolveStatePath('cc-capture-enabled.json');
 const CC_PROJECTS_DIR = join(HOME, '.claude', 'projects');
-const SESSION_EXPORT_DIR = join(HOME, 'Documents', 'wipcomputer--mac-mini-01', 'staff', 'Parker', 'Claude Code - Mini', 'documents', 'sessions');
-const EXPORT_WATERMARK_PATH = join(OC_DIR, 'memory', 'cc-export-watermark.json');
+const SESSION_EXPORT_DIR = process.env.CRYSTAL_SESSION_EXPORT_DIR || join(ldmPaths().agentRoot, 'memory', 'sessions');
+const EXPORT_WATERMARK_PATH = resolveStatePath('cc-export-watermark.json');
 
 // ── Kill switches ──
 
@@ -74,10 +73,9 @@ function loadWatermark(): Watermark {
 }
 
 function saveWatermark(wm: Watermark): void {
-  const dir = dirname(WATERMARK_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const writePath = stateWritePath('cc-capture-watermark.json');
   wm.lastRun = new Date().toISOString();
-  writeFileSync(WATERMARK_PATH, JSON.stringify(wm, null, 2));
+  writeFileSync(writePath, JSON.stringify(wm, null, 2));
 }
 
 // ── JSONL parsing (same as cc-hook.ts) ──
@@ -226,9 +224,8 @@ function loadExportWatermark(): Record<string, number> {
 }
 
 function saveExportWatermark(data: Record<string, number>): void {
-  const dir = dirname(EXPORT_WATERMARK_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(EXPORT_WATERMARK_PATH, JSON.stringify(data, null, 2));
+  const writePath = stateWritePath('cc-export-watermark.json');
+  writeFileSync(writePath, JSON.stringify(data, null, 2));
 }
 
 function formatTimestamp(ts: string | null): string {
