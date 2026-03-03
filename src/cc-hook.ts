@@ -21,22 +21,19 @@
 
 import { Crystal, RemoteCrystal, resolveConfig, createCrystal, type Chunk } from './core.js';
 import { loadRelayKey, encryptJSON } from './crypto.js';
-import { ensureLdm, ldmPaths } from './ldm.js';
+import { ensureLdm, ldmPaths, resolveStatePath, stateWritePath } from './ldm.js';
 import {
   readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync,
   statSync, openSync, readSync, closeSync, copyFileSync,
 } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 
-const HOME = process.env.HOME || '';
 const CC_AGENT_ID = process.env.CRYSTAL_AGENT_ID || 'cc-mini';
 const RELAY_URL = process.env.CRYSTAL_RELAY_URL || '';
 const RELAY_TOKEN = process.env.CRYSTAL_RELAY_TOKEN || '';
-const OC_DIR = join(HOME, '.openclaw');
-const LDM_DAILY = join(HOME, '.ldm', 'agents', CC_AGENT_ID, 'memory', 'daily');
-const PRIVATE_MODE_PATH = join(OC_DIR, 'memory', 'memory-capture-state.json');
-const WATERMARK_PATH = join(OC_DIR, 'memory', 'cc-capture-watermark.json');
-const CC_ENABLED_PATH = join(OC_DIR, 'memory', 'cc-capture-enabled.json');
+const PRIVATE_MODE_PATH = resolveStatePath('memory-capture-state.json');
+const WATERMARK_PATH = resolveStatePath('cc-capture-watermark.json');
+const CC_ENABLED_PATH = resolveStatePath('cc-capture-enabled.json');
 
 // ── Mode detection ──
 
@@ -72,9 +69,8 @@ function isCaptureEnabled(): boolean {
 }
 
 function setCaptureEnabled(enabled: boolean): void {
-  const dir = dirname(CC_ENABLED_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(CC_ENABLED_PATH, JSON.stringify({
+  const writePath = stateWritePath('cc-capture-enabled.json');
+  writeFileSync(writePath, JSON.stringify({
     enabled,
     updatedAt: new Date().toISOString(),
   }, null, 2));
@@ -97,10 +93,9 @@ function loadWatermark(): Watermark {
 }
 
 function saveWatermark(wm: Watermark): void {
-  const dir = dirname(WATERMARK_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const writePath = stateWritePath('cc-capture-watermark.json');
   wm.lastRun = new Date().toISOString();
-  writeFileSync(WATERMARK_PATH, JSON.stringify(wm, null, 2));
+  writeFileSync(writePath, JSON.stringify(wm, null, 2));
 }
 
 // ── JSONL parsing ──

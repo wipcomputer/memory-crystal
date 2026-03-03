@@ -1274,28 +1274,33 @@ export class Crystal {
 // Key resolution order:
 //   1. Explicit overrides (programmatic)
 //   2. process.env (set by op-secrets plugin inside OpenClaw, or by user)
-//   3. .env file in data dir (~/.openclaw/memory-crystal/.env)
-//   4. 1Password via op CLI (if SA token exists at ~/.openclaw/secrets/op-sa-token)
+//   3. .env file in data dir (~/.ldm/memory/.env)
+//   4. 1Password via op CLI (if SA token exists)
 //
 // Two setup paths:
-//   • .env file:    cp .env.example ~/.openclaw/memory-crystal/.env && edit
+//   • .env file:    cp .env.example ~/.ldm/memory/.env && edit
 //   • 1Password:    keys auto-resolved from "Agent Secrets" vault
 
 export function resolveConfig(overrides?: Partial<CrystalConfig>): CrystalConfig {
-  const openclawHome = process.env.OPENCLAW_HOME || join(process.env.HOME || '', '.openclaw');
+  const HOME = process.env.HOME || '';
+  const ldmMemory = join(HOME, '.ldm', 'memory');
 
   // dataDir resolution order:
   // 1. Explicit override (always wins)
   // 2. CRYSTAL_DATA_DIR env var (for testing)
-  // 3. ~/.ldm/memory/ if crystal.db exists there (post-migration)
-  // 4. Legacy ~/.openclaw/memory-crystal/ (pre-migration fallback)
+  // 3. ~/.ldm/memory/ (canonical LDM path)
+  // 4. Legacy ~/.openclaw/memory-crystal/ (pre-LDM migration fallback)
   let dataDir = overrides?.dataDir || process.env.CRYSTAL_DATA_DIR;
   if (!dataDir) {
-    const ldmMemory = join(process.env.HOME || '', '.ldm', 'memory');
     if (existsSync(join(ldmMemory, 'crystal.db'))) {
       dataDir = ldmMemory;
     } else {
-      dataDir = join(openclawHome, 'memory-crystal');
+      const legacyDir = join(HOME, '.openclaw', 'memory-crystal');
+      if (existsSync(join(legacyDir, 'crystal.db'))) {
+        dataDir = legacyDir;
+      } else {
+        dataDir = ldmMemory; // default: new LDM install
+      }
     }
   }
 
@@ -1303,9 +1308,9 @@ export function resolveConfig(overrides?: Partial<CrystalConfig>): CrystalConfig
   loadEnvFile(join(dataDir, '.env'));
 
   // Resolve API keys: env/.env first, then 1Password fallback
-  const openaiApiKey = overrides?.openaiApiKey || process.env.OPENAI_API_KEY || opRead(openclawHome, 'OpenAI API', 'api key');
-  const googleApiKey = overrides?.googleApiKey || process.env.GOOGLE_API_KEY || opRead(openclawHome, 'Google AI', 'api key');
-  const remoteToken = overrides?.remoteToken || process.env.CRYSTAL_REMOTE_TOKEN || opRead(openclawHome, 'Memory Crystal Remote', 'token');
+  const openaiApiKey = overrides?.openaiApiKey || process.env.OPENAI_API_KEY || opRead('OpenAI API', 'api key');
+  const googleApiKey = overrides?.googleApiKey || process.env.GOOGLE_API_KEY || opRead('Google AI', 'api key');
+  const remoteToken = overrides?.remoteToken || process.env.CRYSTAL_REMOTE_TOKEN || opRead('Memory Crystal Remote', 'token');
 
   return {
     dataDir,
@@ -1342,10 +1347,16 @@ function loadEnvFile(path: string): void {
   }
 }
 
-/** Read a secret from 1Password via op CLI. Falls back silently on failure. */
-function opRead(openclawHome: string, item: string, field: string): string | undefined {
+/** Read a secret from 1Password via op CLI. Falls back silently on failure.
+ *  Checks ~/.ldm/secrets/op-sa-token first, then ~/.openclaw/secrets/op-sa-token. */
+function opRead(item: string, field: string): string | undefined {
   try {
-    const saTokenPath = join(openclawHome, 'secrets', 'op-sa-token');
+    const HOME = process.env.HOME || '';
+    // Check LDM path first, then legacy OpenClaw path
+    let saTokenPath = join(HOME, '.ldm', 'secrets', 'op-sa-token');
+    if (!existsSync(saTokenPath)) {
+      saTokenPath = join(HOME, '.openclaw', 'secrets', 'op-sa-token');
+    }
     if (!existsSync(saTokenPath)) return undefined;
     const saToken = readFileSync(saTokenPath, 'utf8').trim();
     return execSync(`op read "op://Agent Secrets/${item}/${field}" 2>/dev/null`, {

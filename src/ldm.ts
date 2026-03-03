@@ -21,6 +21,8 @@ export function getAgentId(): string {
 export interface LdmPaths {
   root: string;           // ~/.ldm
   bin: string;            // ~/.ldm/bin
+  secrets: string;        // ~/.ldm/secrets
+  state: string;          // ~/.ldm/state
   config: string;         // ~/.ldm/config.json
   crystalDb: string;      // ~/.ldm/memory/crystal.db
   crystalLance: string;   // ~/.ldm/memory/lance/
@@ -38,6 +40,8 @@ export function ldmPaths(agentId?: string): LdmPaths {
   return {
     root: LDM_ROOT,
     bin: join(LDM_ROOT, 'bin'),
+    secrets: join(LDM_ROOT, 'secrets'),
+    state: join(LDM_ROOT, 'state'),
     config: join(LDM_ROOT, 'config.json'),
     crystalDb: join(LDM_ROOT, 'memory', 'crystal.db'),
     crystalLance: join(LDM_ROOT, 'memory', 'lance'),
@@ -82,6 +86,8 @@ export function scaffoldLdm(agentId?: string): LdmPaths {
   mkdirSync(join(paths.root, 'memory'), { recursive: true });
   mkdirSync(paths.crystalLance, { recursive: true });
   mkdirSync(paths.bin, { recursive: true });
+  mkdirSync(paths.secrets, { recursive: true, mode: 0o700 });
+  mkdirSync(paths.state, { recursive: true });
 
   // Create agent-specific directories
   mkdirSync(paths.transcripts, { recursive: true });
@@ -180,6 +186,110 @@ export function removeCron(): void {
   const lines = existing.split('\n').filter(line => !isCrystalCaptureLine(line));
   const newCrontab = lines.join('\n');
   execSync('crontab -', { input: newCrontab, encoding: 'utf8' });
+}
+
+// ── Backup script deployment ──
+
+/** Copy ldm-backup.sh from the package's scripts/ dir to ~/.ldm/bin/. */
+export function deployBackupScript(): string {
+  const paths = ldmPaths();
+  mkdirSync(paths.bin, { recursive: true });
+
+  const thisDir = dirname(fileURLToPath(import.meta.url));
+  let scriptSrc = join(thisDir, 'ldm-backup.sh');
+  if (!existsSync(scriptSrc)) {
+    scriptSrc = join(thisDir, '..', 'scripts', 'ldm-backup.sh');
+  }
+  const scriptDest = join(paths.bin, 'ldm-backup.sh');
+
+  if (!existsSync(scriptSrc)) {
+    throw new Error(`ldm-backup.sh not found at ${scriptSrc}`);
+  }
+
+  copyFileSync(scriptSrc, scriptDest);
+  chmodSync(scriptDest, 0o755);
+  return scriptDest;
+}
+
+/** Install a LaunchAgent for daily backups at 03:00. */
+export function installBackupLaunchAgent(): string {
+  const scriptPath = join(ldmPaths().bin, 'ldm-backup.sh');
+  if (!existsSync(scriptPath)) {
+    throw new Error(`Backup script not found. Run crystal init first.`);
+  }
+
+  const launchAgentsDir = join(HOME, 'Library', 'LaunchAgents');
+  mkdirSync(launchAgentsDir, { recursive: true });
+  const plistPath = join(launchAgentsDir, 'ai.openclaw.ldm-backup.plist');
+
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.openclaw.ldm-backup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>bash</string>
+    <string>${scriptPath}</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/tmp/ldm-dev-tools/ldm-backup.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/ldm-dev-tools/ldm-backup.log</string>
+</dict>
+</plist>`;
+
+  writeFileSync(plistPath, plist);
+
+  // Unload first if already loaded (idempotent)
+  try { execSync(`launchctl unload ${plistPath} 2>/dev/null`); } catch {}
+  execSync(`launchctl load ${plistPath}`);
+
+  return plistPath;
+}
+
+// ── Legacy path resolution ──
+// Checks ~/.ldm first, falls back to ~/.openclaw for migration.
+// Reads from wherever the file exists. Writes always go to ~/.ldm.
+
+const LEGACY_OC_DIR = join(HOME, '.openclaw');
+
+/** Resolve a path that might exist at the legacy .openclaw location.
+ *  Returns the LDM path if the file exists there, otherwise checks legacy.
+ *  For writing, always use the ldmPath directly. */
+export function resolveStatePath(filename: string): string {
+  const paths = ldmPaths();
+  const ldmPath = join(paths.state, filename);
+  if (existsSync(ldmPath)) return ldmPath;
+  const legacyPath = join(LEGACY_OC_DIR, 'memory', filename);
+  if (existsSync(legacyPath)) return legacyPath;
+  return ldmPath; // default to LDM for new files
+}
+
+/** Get the write path for state files (always LDM). */
+export function stateWritePath(filename: string): string {
+  const paths = ldmPaths();
+  const dir = paths.state;
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return join(dir, filename);
+}
+
+/** Resolve a secrets path. Checks ~/.ldm/secrets first, then ~/.openclaw/secrets. */
+export function resolveSecretPath(filename: string): string {
+  const paths = ldmPaths();
+  const ldmPath = join(paths.secrets, filename);
+  if (existsSync(ldmPath)) return ldmPath;
+  const legacyPath = join(LEGACY_OC_DIR, 'secrets', filename);
+  if (existsSync(legacyPath)) return legacyPath;
+  return ldmPath; // default to LDM for new files
 }
 
 // ── Quick check ──
