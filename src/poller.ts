@@ -14,6 +14,7 @@ import { Crystal, resolveConfig, type Chunk } from './core.js';
 import { loadRelayKey, decryptJSON, encrypt, hashBuffer, type EncryptedPayload } from './crypto.js';
 import { ensureLdm, ldmPaths, resolveStatePath, stateWritePath } from './ldm.js';
 import { generateSessionSummary, writeSummaryFile, type SummaryMessage } from './summarize.js';
+import { isNewAgent, ensureStaging, markReady } from './staging.js';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
@@ -126,6 +127,26 @@ async function pollOnce(): Promise<{ ingested: number; errors: number }> {
         continue;
       }
 
+      // Staging detection: if this is a new agent, route to staging
+      if (isNewAgent(drop.agent_id)) {
+        process.stderr.write(`[relay-poller] new agent "${drop.agent_id}" detected, routing to staging\n`);
+        const staging = ensureStaging(drop.agent_id);
+        // Write transcript to staging
+        const jsonlPath = join(staging.transcripts, `relay-${blob.id}.jsonl`);
+        const jsonlLines = drop.messages.map(m => JSON.stringify(m)).join('\n') + '\n';
+        writeFileSync(jsonlPath, jsonlLines);
+        // Mark as ready after all blobs for this agent are processed
+        // (for now, mark ready on each blob; processStagedAgent handles idempotency)
+        markReady(drop.agent_id);
+        // Confirm receipt
+        await fetch(`${RELAY_URL}/confirm/conversations/${blob.id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+        });
+        process.stderr.write(`[relay-poller] staged ${drop.messages.length} messages for ${drop.agent_id}\n`);
+        continue;
+      }
+
       // Build chunks from decrypted messages
       const maxSingleChunkChars = 2000 * 4;
       const chunks: Chunk[] = [];
@@ -210,7 +231,95 @@ async function pollOnce(): Promise<{ ingested: number; errors: number }> {
     }
   }
 
+  // Also poll commands channel and deliver to Crystal Core gateway
+  try {
+    await pollCommands();
+  } catch (err: any) {
+    process.stderr.write(`[relay-poller] commands poll failed (non-fatal): ${err.message}\n`);
+  }
+
   return { ingested, errors };
+}
+
+// ── Commands channel polling ──
+
+interface RelayCommand {
+  action: string;
+  agent_id?: string;
+  mode?: string;
+  from_agent?: string;
+  payload?: any;
+}
+
+async function pollCommands(): Promise<void> {
+  const relayKey = loadRelayKey();
+
+  const listResp = await fetch(`${RELAY_URL}/pickup/commands`, {
+    headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+  });
+
+  if (!listResp.ok) return;
+
+  const listData = await listResp.json() as { count: number; blobs: BlobInfo[] };
+  if (listData.count === 0) return;
+
+  process.stderr.write(`[relay-poller] ${listData.count} command(s) waiting\n`);
+
+  for (const blob of listData.blobs) {
+    try {
+      const blobResp = await fetch(`${RELAY_URL}/pickup/commands/${blob.id}`, {
+        headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+      });
+
+      if (!blobResp.ok) continue;
+
+      const encryptedText = await blobResp.text();
+      const encrypted = JSON.parse(encryptedText) as EncryptedPayload;
+
+      let cmd: RelayCommand;
+      try {
+        cmd = decryptJSON<RelayCommand>(encrypted, relayKey);
+      } catch {
+        // Bad blob, delete and skip
+        await fetch(`${RELAY_URL}/confirm/commands/${blob.id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+        });
+        continue;
+      }
+
+      // Deliver to Crystal Core gateway
+      const gatewayPort = process.env.CRYSTAL_SERVE_PORT || '18790';
+      try {
+        const resp = await fetch(`http://127.0.0.1:${gatewayPort}/process`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: cmd.action || 'dream-weave',
+            agent_id: cmd.agent_id,
+            mode: cmd.mode,
+          }),
+        });
+
+        if (resp.ok) {
+          process.stderr.write(`[relay-poller] delivered command: ${cmd.action} for ${cmd.agent_id}\n`);
+        } else {
+          process.stderr.write(`[relay-poller] gateway rejected command: ${resp.status}\n`);
+        }
+      } catch (err: any) {
+        // Gateway might not be running, that's ok
+        process.stderr.write(`[relay-poller] gateway not available (non-fatal): ${err.message}\n`);
+      }
+
+      // Confirm receipt
+      await fetch(`${RELAY_URL}/confirm/commands/${blob.id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+      });
+    } catch (err: any) {
+      process.stderr.write(`[relay-poller] command processing error: ${err.message}\n`);
+    }
+  }
 }
 
 // ── Push mirror snapshot ──

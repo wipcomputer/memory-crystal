@@ -26,11 +26,22 @@ Crystal Node (laptop) --[encrypt]--> Relay (Cloudflare R2) --[pickup + decrypt]-
 Crystal Core --[encrypt mirror]--> Relay --[pickup + decrypt]--> Crystal Node
 ```
 
-Two one-way roads:
-- **Node to Core** ... encrypted conversation chunks (ephemeral, deleted after pickup)
-- **Core to Nodes** ... search-ready DB snapshot via mirror-sync
+Three channels:
+- **conversations** (Node to Core) ... encrypted conversation chunks (ephemeral, deleted after pickup)
+- **mirror** (Core to Nodes) ... search-ready DB snapshot via mirror-sync
+- **commands** (bidirectional) ... Nodes send commands to Core ("run Dream Weaver", "process my data"), Core sends results back
 
 The relay is a dead drop. It stores encrypted blobs temporarily and serves them on request. It has no decryption capability. If someone compromises the relay, they get encrypted noise.
+
+### New Agent Staging
+
+When the Core's poller receives data from an unknown agent ID, it routes to staging instead of live ingest:
+1. Transcripts written to `~/.ldm/staging/{agent_id}/transcripts/`
+2. Agent marked as "ready" for processing
+3. Staging processor runs backfill + Dream Weaver full mode
+4. Once complete, agent moves to live capture path
+
+This handles the cold-start problem. A new device connects, sends its history, and Core builds the full memory stack automatically.
 
 ### Cloud Memory & Search (ChatGPT, Claude, iOS, web)
 
@@ -157,12 +168,13 @@ Both use the same URL. Same OAuth flow. Same tools.
 
 ```
 Encrypted Relay (device sync):
-  src/worker.ts       Cloudflare Worker, R2 storage, dead drop
+  src/worker.ts       Cloudflare Worker, R2 storage, dead drop (3 channels)
   src/crypto.ts       AES-256-GCM + HMAC-SHA256
-  src/poller.ts       Crystal Core pickup + ingest
+  src/poller.ts       Crystal Core pickup + ingest + staging detection + commands
   src/mirror-sync.ts  DB mirror push to Crystal Nodes
-  src/cc-hook.ts      Claude Code hook (relay mode)
+  src/cc-hook.ts      Claude Code hook (relay mode) + sendCommand()
   src/cc-poller.ts    Continuous capture (cron, primary local path)
+  src/staging.ts      New agent staging pipeline (detect, stage, process)
 
 Cloud Memory & Search (ChatGPT/Claude):
   src/worker-mcp.ts     OAuth 2.1 + DCR, MCP protocol, 4 tools

@@ -264,6 +264,41 @@ async function dropAtRelay(messages: ExtractedMessage[]): Promise<number> {
   return 0;
 }
 
+// ── Relay commands: send commands to Core ──
+
+export async function sendCommand(command: {
+  action: string;
+  agent_id?: string;
+  mode?: string;
+}): Promise<void> {
+  if (!RELAY_URL || !RELAY_TOKEN) {
+    throw new Error('Relay not configured. Set CRYSTAL_RELAY_URL and CRYSTAL_RELAY_TOKEN.');
+  }
+
+  const relayKey = loadRelayKey();
+  const payload = {
+    ...command,
+    from_agent: CC_AGENT_ID,
+    sent_at: new Date().toISOString(),
+  };
+
+  const encrypted = encryptJSON(payload, relayKey);
+  const body = JSON.stringify(encrypted);
+
+  const resp = await fetch(`${RELAY_URL}/drop/commands`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${RELAY_TOKEN}`,
+      'Content-Type': 'application/octet-stream',
+    },
+    body,
+  });
+
+  if (!resp.ok) {
+    throw new Error(`Command relay failed: ${resp.status} ${await resp.text()}`);
+  }
+}
+
 // ── Local mode: direct ingest with batched retry ──
 
 const BATCH_SIZE = 200;
