@@ -1,6 +1,6 @@
 {
   "name": "memory-crystal",
-  "version": "0.4.1",
+  "version": "0.6.0",
   "description": "Sovereign memory system — local-first with ephemeral encrypted relay. Your memory, your machine, your rules.",
   "type": "module",
   "main": "dist/core.js",
@@ -14,8 +14,8 @@
     "crystal-mcp": "dist/mcp-server.js"
   },
   "scripts": {
-    "build": "tsup src/core.ts src/cli.ts src/mcp-server.ts src/openclaw.ts src/migrate.ts src/cc-hook.ts src/cc-poller.ts src/crypto.ts src/pair.ts src/poller.ts src/mirror-sync.ts src/ldm.ts src/summarize.ts src/role.ts src/doctor.ts src/bridge.ts --format esm --dts --outDir dist && tsup src/worker.ts --format esm --outDir dist --no-dts && cp scripts/crystal-capture.sh scripts/ldm-backup.sh dist/",
-    "build:local": "tsup src/core.ts src/cli.ts src/mcp-server.ts src/openclaw.ts src/migrate.ts src/cc-hook.ts src/cc-poller.ts src/crypto.ts src/pair.ts src/poller.ts src/mirror-sync.ts src/ldm.ts src/summarize.ts src/role.ts src/doctor.ts src/bridge.ts --format esm --dts --outDir dist",
+    "build": "tsup src/core.ts src/cli.ts src/mcp-server.ts src/openclaw.ts src/migrate.ts src/cc-hook.ts src/cc-poller.ts src/crypto.ts src/pair.ts src/poller.ts src/mirror-sync.ts src/ldm.ts src/summarize.ts src/role.ts src/doctor.ts src/bridge.ts src/discover.ts src/bulk-copy.ts src/oc-backfill.ts src/dream-weaver.ts src/crystal-serve.ts src/staging.ts --format esm --dts --outDir dist && tsup src/worker.ts --format esm --outDir dist --no-dts && cp scripts/crystal-capture.sh scripts/ldm-backup.sh dist/",
+    "build:local": "tsup src/core.ts src/cli.ts src/mcp-server.ts src/openclaw.ts src/migrate.ts src/cc-hook.ts src/cc-poller.ts src/crypto.ts src/pair.ts src/poller.ts src/mirror-sync.ts src/ldm.ts src/summarize.ts src/role.ts src/doctor.ts src/bridge.ts src/discover.ts src/bulk-copy.ts src/oc-backfill.ts src/dream-weaver.ts src/crystal-serve.ts src/staging.ts --format esm --dts --outDir dist",
     "build:worker": "tsup src/worker.ts --format esm --outDir dist --no-dts",
     "build:cloud": "tsup src/worker-mcp.ts src/cloud-crystal.ts --format esm --outDir dist --no-dts",
     "deploy:cloud": "bash -c 'git diff --quiet HEAD -- src/ wrangler-mcp.toml || (echo \"ERROR: uncommitted changes. commit before deploying.\" && exit 1)' && wrangler deploy --config wrangler-mcp.toml",
@@ -28,6 +28,7 @@
     "migrate": "node dist/migrate.js"
   },
   "dependencies": {
+    "dream-weaver-protocol": "file:../dream-weaver-protocol-private",
     "@lancedb/lancedb": "^0.15.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "agents": "^0.7.2",

@@ -4,8 +4,11 @@
 
 import { Crystal, resolveConfig, type Chunk } from './core.js';
 import { runDevUpdate } from './dev-update.js';
-import { resolveStatePath } from './ldm.js';
-import { existsSync, readFileSync } from 'node:fs';
+import { resolveStatePath, ldmPaths, ensureLdm } from './ldm.js';
+import {
+  existsSync, readFileSync, readdirSync, copyFileSync, statSync, mkdirSync,
+} from 'node:fs';
+import { join, basename } from 'node:path';
 
 const PRIVATE_MODE_PATH = resolveStatePath('memory-capture-state.json');
 
@@ -23,6 +26,86 @@ function isPrivateMode(): boolean {
 
 // getPrivateState and setPrivateMode moved to lesa-private-mode plugin.
 // Only isPrivateMode() is needed here for agent_end and crystal_remember checks.
+
+// ── Raw data sync to LDM ──
+// Copies session JSONLs, workspace .md files, and daily logs to LDM after every turn.
+// Non-blocking, non-fatal. Uses idempotent copy (skip if same size).
+
+const OC_AGENT_ID = 'oc-lesa-mini';
+
+function syncRawDataToLdm(logger: any): void {
+  try {
+    const paths = ensureLdm(OC_AGENT_ID);
+    const HOME = process.env.HOME || '';
+    const ocDir = join(HOME, '.openclaw');
+
+    // 1. Sync session JSONLs from ~/.openclaw/agents/main/sessions/
+    const sessionsDir = join(ocDir, 'agents', 'main', 'sessions');
+    if (existsSync(sessionsDir)) {
+      let copied = 0;
+      for (const file of readdirSync(sessionsDir)) {
+        if (!file.endsWith('.jsonl')) continue;
+        const src = join(sessionsDir, file);
+        const dest = join(paths.transcripts, file);
+        if (idempotentCopy(src, dest)) copied++;
+      }
+      if (copied > 0) logger.info(`memory-crystal: synced ${copied} session files to LDM`);
+    }
+
+    // 2. Sync workspace .md files from ~/.openclaw/workspace/
+    const workspaceDir = join(ocDir, 'workspace');
+    if (existsSync(workspaceDir)) {
+      syncDirRecursive(workspaceDir, paths.workspace, '.md');
+    }
+
+    // 3. Sync daily logs from ~/.openclaw/workspace/memory/ to LDM daily/
+    const dailyDir = join(ocDir, 'workspace', 'memory');
+    if (existsSync(dailyDir)) {
+      for (const file of readdirSync(dailyDir)) {
+        if (!file.endsWith('.md')) continue;
+        // Only sync date-formatted daily logs (YYYY-MM-DD.md)
+        if (/^\d{4}-\d{2}-\d{2}\.md$/.test(file)) {
+          const src = join(dailyDir, file);
+          const dest = join(paths.daily, file);
+          idempotentCopy(src, dest);
+        }
+      }
+    }
+  } catch (err: any) {
+    logger.warn(`memory-crystal: raw data sync failed (non-fatal): ${err.message}`);
+  }
+}
+
+/** Copy file only if source is newer or destination doesn't exist. Returns true if copied. */
+function idempotentCopy(src: string, dest: string): boolean {
+  try {
+    if (existsSync(dest)) {
+      const srcStat = statSync(src);
+      const destStat = statSync(dest);
+      if (srcStat.size === destStat.size && srcStat.mtimeMs <= destStat.mtimeMs) return false;
+    }
+    const destDir = join(dest, '..');
+    if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
+    copyFileSync(src, dest);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Recursively sync files with a given extension from srcDir to destDir. */
+function syncDirRecursive(srcDir: string, destDir: string, ext: string): void {
+  if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
+  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+    const srcPath = join(srcDir, entry.name);
+    const destPath = join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      syncDirRecursive(srcPath, destPath, ext);
+    } else if (entry.name.endsWith(ext)) {
+      idempotentCopy(srcPath, destPath);
+    }
+  }
+}
 
 export default {
   register(api: any) {
@@ -127,6 +210,9 @@ export default {
       } catch (err: any) {
         api.logger.error(`memory-crystal: ingest error: ${err.message}`);
       }
+
+      // Raw data sync to LDM (non-blocking, non-fatal)
+      syncRawDataToLdm(api.logger);
     });
 
     // ── Tools ──

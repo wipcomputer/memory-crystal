@@ -6,6 +6,8 @@
 // Channels:
 //   conversations — devices drop encrypted conversation chunks for Mini to pick up
 //   mirror        — Mini drops encrypted DB snapshot for devices to pick up
+//   commands      — Node sends commands to Core ("process my data", "run Dream Weaver")
+//                   Core sends results back ("processing complete", "mirror ready")
 //
 // Endpoints:
 //   POST   /drop/:channel       — deposit encrypted blob
@@ -49,7 +51,7 @@ function authenticate(request: Request, env: Env): AuthResult | Response {
 
 // ── Channel validation ──
 
-const VALID_CHANNELS = ['conversations', 'mirror'];
+const VALID_CHANNELS = ['conversations', 'mirror', 'commands'];
 
 function isValidChannel(channel: string): boolean {
   return VALID_CHANNELS.includes(channel);

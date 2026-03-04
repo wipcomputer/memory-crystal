@@ -31,6 +31,7 @@ export interface LdmPaths {
   sessions: string;       // ~/.ldm/agents/{agent_id}/memory/sessions/
   daily: string;          // ~/.ldm/agents/{agent_id}/memory/daily/
   journals: string;       // ~/.ldm/agents/{agent_id}/memory/journals/
+  workspace: string;      // ~/.ldm/agents/{agent_id}/memory/workspace/
 }
 
 export function ldmPaths(agentId?: string): LdmPaths {
@@ -50,6 +51,7 @@ export function ldmPaths(agentId?: string): LdmPaths {
     sessions: join(agentRoot, 'memory', 'sessions'),
     daily: join(agentRoot, 'memory', 'daily'),
     journals: join(agentRoot, 'memory', 'journals'),
+    workspace: join(agentRoot, 'memory', 'workspace'),
   };
 }
 
@@ -94,6 +96,7 @@ export function scaffoldLdm(agentId?: string): LdmPaths {
   mkdirSync(paths.sessions, { recursive: true });
   mkdirSync(paths.daily, { recursive: true });
   mkdirSync(paths.journals, { recursive: true });
+  mkdirSync(paths.workspace, { recursive: true });
 
   // Update config.json
   const id = agentId || getAgentId();
