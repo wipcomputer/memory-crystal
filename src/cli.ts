@@ -40,7 +40,9 @@ Commands:
 
   crystal serve [--port 18790]                Crystal Core gateway (localhost HTTP server)
   crystal dream-weave [--agent <id>] [--mode full|incremental] [--dry-run] [--since <datetime>]
-  crystal init [--agent <id>] [--yes] [--skip-discover]  Scaffold ~/.ldm/ + discover sessions
+  crystal init [--agent <id>] [--core] [--node] [--pair <code>] [--yes] [--skip-discover]
+                                              Install or update Memory Crystal
+  crystal update [--agent <id>] [--yes]       Update existing install (alias for init --update)
   crystal backfill [--agent <id>] [--dry-run] [--limit <n>]  Embed raw sessions into crystal
   crystal migrate-embeddings [--dry-run]      Migrate context-embeddings into crystal
   crystal migrate-db                          Move crystal.db to ~/.ldm/memory/
@@ -67,7 +69,7 @@ async function main() {
   const flags: Record<string, string> = {};
   let positional: string[] = [];
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === '--dry-run' || args[i] === '--yes' || args[i] === '-y' || args[i] === '--skip-discover' || args[i] === '--include-secrets' || args[i] === '--deep') {
+    if (args[i] === '--dry-run' || args[i] === '--yes' || args[i] === '-y' || args[i] === '--skip-discover' || args[i] === '--include-secrets' || args[i] === '--deep' || args[i] === '--core' || args[i] === '--node' || args[i] === '--update') {
       flags[args[i].replace(/^-+/, '')] = 'true';
     } else if (args[i].startsWith('--') || args[i] === '-n') {
       const key = args[i].replace(/^-+/, '');
@@ -218,6 +220,13 @@ async function main() {
       console.log(`  Claude Code:  ${isBridgeRegistered() ? 'registered' : 'not registered'}`);
       console.log(`  Desktop:      ${isBridgeDesktopRegistered() ? 'registered' : 'not registered'}`);
     }
+    return;
+  }
+
+  if (command === 'update') {
+    // update is an alias for init --update
+    flags['update'] = 'true';
+    await handleLdmCommand('init', flags, positional);
     return;
   }
 
@@ -388,19 +397,6 @@ async function main() {
         break;
       }
 
-      case 'init': {
-        const agentId = flags.agent || getAgentId();
-        const paths = scaffoldLdm(agentId);
-        console.log(`LDM scaffolded for agent "${agentId}"`);
-        console.log(`  Root:         ${paths.root}`);
-        console.log(`  Crystal DB:   ${paths.crystalDb}`);
-        console.log(`  Transcripts:  ${paths.transcripts}`);
-        console.log(`  Sessions:     ${paths.sessions}`);
-        console.log(`  Daily:        ${paths.daily}`);
-        console.log(`  Journals:     ${paths.journals}`);
-        break;
-      }
-
       case 'migrate-db': {
         const paths = ensureLdm();
         const HOME = process.env.HOME || '';
@@ -477,56 +473,69 @@ async function main() {
 
 async function handleLdmCommand(command: string, flags: Record<string, string>, positional: string[] = []): Promise<void> {
   if (command === 'init') {
+    const { detectInstallState, runInstallOrUpdate, formatUpdateSummary } = await import('./installer.js');
     const agentId = flags.agent || getAgentId();
-    const paths = scaffoldLdm(agentId);
-    console.log(`LDM scaffolded for agent "${agentId}"`);
-    console.log(`  Root:         ${paths.root}`);
-    console.log(`  Bin:          ${paths.bin}`);
-    console.log(`  Crystal DB:   ${paths.crystalDb}`);
-    console.log(`  Transcripts:  ${paths.transcripts}`);
-    console.log(`  Sessions:     ${paths.sessions}`);
-    console.log(`  Daily:        ${paths.daily}`);
-    console.log(`  Journals:     ${paths.journals}`);
-    console.log(`  Workspace:    ${paths.workspace}`);
 
-    // Deploy capture script to ~/.ldm/bin/
-    try {
-      const scriptPath = deployCaptureScript();
-      console.log(`  Capture:      ${scriptPath}`);
-    } catch (err: any) {
-      console.error(`  Capture:      FAILED (${err.message})`);
+    // Detect current state
+    const state = detectInstallState();
+    const isFresh = !state.ldmExists || state.installedVersion === null;
+    const isUpdate = !isFresh && state.needsUpdate;
+
+    // If already up to date and not a fresh install
+    if (!isFresh && !isUpdate && !('update' in flags)) {
+      console.log(`Memory Crystal v${state.repoVersion} is already installed and up to date.`);
+      console.log(`Run "crystal doctor" to check health.`);
+      return;
     }
 
-    // Install cron job for continuous capture
-    try {
-      installCron();
-      console.log(`  Cron:         installed (every minute)`);
-    } catch (err: any) {
-      console.error(`  Cron:         FAILED (${err.message})`);
+    // Show what we're about to do
+    if (isUpdate && state.installedVersion) {
+      console.log(formatUpdateSummary(state.installedVersion, state.repoVersion));
+      console.log('');
+    } else if (isFresh) {
+      console.log(`Installing Memory Crystal v${state.repoVersion}...`);
+      console.log('');
     }
 
-    // Deploy backup script to ~/.ldm/bin/
-    try {
-      const backupPath = deployBackupScript();
-      console.log(`  Backup:       ${backupPath}`);
-    } catch (err: any) {
-      console.error(`  Backup:       FAILED (${err.message})`);
+    // Determine role from flags
+    let role: 'core' | 'node' | undefined;
+    if ('core' in flags) role = 'core';
+    else if ('node' in flags) role = 'node';
+
+    // Run install/update
+    const result = await runInstallOrUpdate({
+      agentId,
+      role,
+      pairCode: flags.pair,
+      yes: 'yes' in flags || 'y' in flags,
+      skipDiscover: 'skip-discover' in flags,
+    });
+
+    // Print results
+    if (result.action === 'up-to-date') {
+      console.log(`Memory Crystal v${result.version} is already installed and up to date.`);
+      console.log(`Run "crystal doctor" to check health.`);
+      return;
+    }
+
+    console.log(`\n${result.action === 'installed' ? 'Install' : 'Update'} complete (v${result.version}):\n`);
+    for (const step of result.steps) {
+      const isError = step.includes('failed') || step.includes('FAILED');
+      console.log(`  ${isError ? '[!!]' : '[OK]'} ${step}`);
     }
 
     // Check bridge status
     try {
       const { isBridgeInstalled, isBridgeRegistered } = await import('./bridge.js');
       if (isBridgeInstalled() && !isBridgeRegistered()) {
-        console.log(`  Bridge:       found but not registered. Run "crystal bridge setup" to connect.`);
+        console.log(`\n  Bridge found but not registered. Run "crystal bridge setup" to connect.`);
       } else if (!isBridgeInstalled()) {
-        console.log(`  Bridge:       not installed. Run "npm install -g lesa-bridge && crystal bridge setup" to enable AI-to-AI communication.`);
-      } else {
-        console.log(`  Bridge:       registered`);
+        console.log(`\n  Bridge not installed. Run "npm install -g lesa-bridge && crystal bridge setup" for AI-to-AI communication.`);
       }
     } catch {}
 
-    // Session discovery + bulk copy
-    if (!('skip-discover' in flags)) {
+    // Session discovery (fresh install only, unless --skip-discover)
+    if (isFresh && !('skip-discover' in flags)) {
       try {
         const { discoverAll, formatBytes } = await import('./discover.js');
         const { bulkCopyToLdm } = await import('./bulk-copy.js');
@@ -543,7 +552,6 @@ async function handleLdmCommand(command: string, flags: Record<string, string>, 
           if (!shouldCopy && process.stdin.isTTY) {
             shouldCopy = await askYesNo(`\nCopy to LDM? [Y/n] `);
           } else if (!shouldCopy) {
-            // Non-interactive, default to yes
             shouldCopy = true;
           }
 
@@ -551,40 +559,11 @@ async function handleLdmCommand(command: string, flags: Record<string, string>, 
             for (const harness of discovery.harnesses) {
               const { discoverSessionFiles } = await import('./discover.js');
               const sessionPaths = discoverSessionFiles(harness);
-              const result = bulkCopyToLdm(sessionPaths, agentId, {
+              const copyResult = bulkCopyToLdm(sessionPaths, agentId, {
                 workspace: harness.platform === 'openclaw',
                 workspaceSrc: harness.workspaceDir,
               });
-              console.log(`  ${harness.platform}: copied ${result.filesCopied}, skipped ${result.filesSkipped} (${formatBytes(result.bytesWritten)} in ${result.durationMs}ms)`);
-            }
-
-            // Harness-aware next steps
-            try {
-              const { detectRole } = await import('./role.js');
-              const role = detectRole();
-
-              // Check what harnesses were found
-              const hasOpenClaw = discovery.harnesses.some(h => h.platform === 'openclaw');
-              const hasClaudeCode = discovery.harnesses.some(h => h.platform === 'claude-code');
-
-              if (hasOpenClaw && !hasClaudeCode) {
-                // OpenClaw only: raw data backup mode
-                console.log(`\nOpenClaw detected. Raw data backed up to LDM.`);
-                console.log(`OpenClaw handles identity/warm-start. Dream Weaver not needed.`);
-                console.log(`Next: Verify with "crystal doctor".`);
-              } else if (role.role === 'node') {
-                // Claude Code on a Node: relay to Core
-                console.log(`\nNode mode. Sessions will be relayed to Core for embedding.`);
-                console.log(`Next: Run "crystal backfill" to relay sessions to Core.`);
-              } else {
-                // Claude Code on Core/Standalone: full pipeline
-                console.log(`\nClaude Code detected. Full pipeline available:`);
-                console.log(`  1. crystal backfill --dry-run     Preview embedding cost`);
-                console.log(`  2. crystal backfill               Embed all sessions (~$3)`);
-                console.log(`  3. crystal dream-weave --mode full Run Dream Weaver (creates identity/journals)`);
-              }
-            } catch {
-              console.log(`\nNext: Run "crystal backfill --dry-run" to preview embedding.`);
+              console.log(`  ${harness.platform}: copied ${copyResult.filesCopied}, skipped ${copyResult.filesSkipped} (${formatBytes(copyResult.bytesWritten)} in ${copyResult.durationMs}ms)`);
             }
           }
         } else {
@@ -593,6 +572,12 @@ async function handleLdmCommand(command: string, flags: Record<string, string>, 
       } catch (err: any) {
         console.error(`\nSession discovery failed (non-fatal): ${err.message}`);
       }
+    }
+
+    // Next steps
+    console.log(`\nNext: Run "crystal doctor" to verify everything is working.`);
+    if (result.action === 'installed') {
+      console.log(`Restart Claude Code to activate the new hooks and MCP server.`);
     }
 
     return;

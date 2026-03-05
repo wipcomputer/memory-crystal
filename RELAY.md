@@ -1,6 +1,6 @@
 ###### WIP Computer
 
-# Relay: Multi-Device Sync
+# Relay: Memory Sync
 
 Memory Crystal works on one machine out of the box. Relay lets your memory follow you across machines and surfaces. Conversations captured on your laptop are available on your desktop. Conversations from ChatGPT on your phone are searchable from Claude Code on your Mac.
 
@@ -28,7 +28,7 @@ Crystal Core --[encrypt mirror]--> Relay --[pickup + decrypt]--> Crystal Node
 
 Three channels:
 - **conversations** (Node to Core) ... encrypted conversation chunks (ephemeral, deleted after pickup)
-- **mirror** (Core to Nodes) ... search-ready DB snapshot via mirror-sync
+- **mirror** (Core to Nodes) ... delta chunks (pre-embedded) + file tree deltas
 - **commands** (bidirectional) ... Nodes send commands to Core ("run Dream Weaver", "process my data"), Core sends results back
 
 The relay is a dead drop. It stores encrypted blobs temporarily and serves them on request. It has no decryption capability. If someone compromises the relay, they get encrypted noise.
@@ -43,18 +43,25 @@ When the Core's poller receives data from an unknown agent ID, it routes to stag
 
 This handles the cold-start problem. A new device connects, sends its history, and Core builds the full memory stack automatically.
 
-### Cloud Memory & Search (ChatGPT, Claude, iOS, web)
+### Delta Sync (not full mirror)
 
-For connecting ChatGPT and Claude on any surface. A remote MCP server with OAuth 2.1 that ChatGPT and Claude connect to natively.
+The mirror channel uses delta sync. Core pushes only new chunks since last sync, not the entire crystal.db. For a 1.9 GB+ database, this is the difference between a few KB (quiet day) and a few MB (busy day) vs the full database every time.
 
-```
-ChatGPT (iOS) --[OAuth]--> Cloud MCP Worker --[D1 + Vectorize]--> search results
-Claude (web)  --[OAuth]--> Cloud MCP Worker --[remember]--> stored + relayed to home
-```
+- **New node (cold start):** One-time full export of all chunks + all files
+- **Ongoing sync:** Delta chunks (pre-embedded by Core) + changed files only
+- **Watermark tracking:** Core tracks the last synced chunk ID per node
 
-Two tiers:
-- **Sovereign (Tier 1):** Remember only. Data is encrypted and relayed to your Crystal Core. No cloud search. Maximum privacy.
-- **Convenience (Tier 2):** Remember + search. Data is stored in D1 + Vectorize for cloud search. Your Crystal Core is still the source of truth.
+### Full LDM Tree Sync
+
+The relay syncs the entire `~/.ldm/` file tree, not just the database. Embeddings are pointers to artifacts. If the file isn't on the node, the search result is an orphan.
+
+What syncs:
+- Agent memory files (workspace, daily logs, journals, sessions, transcripts)
+- Agent identity files (SOUL.md, IDENTITY.md, CONTEXT.md, REFERENCE.md)
+- Shared files (`~/.ldm/shared/`)
+- Media (images, videos, any artifact an embedding references)
+
+File sync uses a manifest (path + SHA-256 hash + size). Only changed files transfer. Core always wins conflicts.
 
 ## Setup
 
@@ -125,29 +132,13 @@ Full deployment details in [Technical Documentation](https://github.com/wipcompu
 
 No fees. No dependencies on us. The relay code is open source.
 
-### Connect ChatGPT and Claude (Cloud Memory & Search)
+### Connecting ChatGPT and Claude
 
-The cloud MCP server handles ChatGPT and Claude connections via OAuth 2.1. One server, six surfaces (macOS, iOS, web for both ChatGPT and Claude).
+Every node has the full database and file tree. All search is local. There is no cloud search layer.
 
-Deploy:
-```bash
-bash scripts/deploy-cloud.sh
-```
+ChatGPT and Claude on iOS/web connect via the MCP server running on your local machine. On platforms where a local MCP server isn't possible (iOS without a Mac nearby), the native Apple app (future) will provide local search via MLX Swift.
 
-This pulls credentials from 1Password, creates D1 + Vectorize resources, and deploys the Worker. Once live, connect from:
-- **ChatGPT:** Developer Mode or Apps connector, add the MCP server URL
-- **Claude:** Settings > Connectors, add the MCP server URL
-
-Both use the same URL. Same OAuth flow. Same tools.
-
-**Tools available:**
-
-| Tool | What it does |
-|------|-------------|
-| `memory_search` | Search your memories (Tier 2 only. Tier 1 returns "local only") |
-| `memory_remember` | Save a fact or observation |
-| `memory_forget` | Deprecate a memory by ID |
-| `memory_status` | Chunk count, memory count, connected agents |
+The Cloud MCP demo server (`worker-mcp.ts`, D1 + Vectorize) exists for onboarding and testing but is not the production architecture. With full LDM sync, every device that has Memory Crystal installed can search locally.
 
 ## Encryption
 
@@ -171,14 +162,15 @@ Encrypted Relay (device sync):
   src/worker.ts       Cloudflare Worker, R2 storage, dead drop (3 channels)
   src/crypto.ts       AES-256-GCM + HMAC-SHA256
   src/poller.ts       Crystal Core pickup + ingest + staging detection + commands
-  src/mirror-sync.ts  DB mirror push to Crystal Nodes
+  src/mirror-sync.ts  Delta chunk sync + file tree sync to Crystal Nodes
+  src/file-sync.ts    Manifest-based file tree delta sync
   src/cc-hook.ts      Claude Code hook (relay mode) + sendCommand()
   src/cc-poller.ts    Continuous capture (cron, primary local path)
   src/staging.ts      New agent staging pipeline (detect, stage, process)
 
-Cloud Memory & Search (ChatGPT/Claude):
+Cloud MCP Demo (deprecated for production):
   src/worker-mcp.ts     OAuth 2.1 + DCR, MCP protocol, 4 tools
-  src/cloud-crystal.ts  D1 + Vectorize backend (hybrid search)
+  src/cloud-crystal.ts  D1 + Vectorize backend (demo/onboarding only)
   wrangler-mcp.toml     Separate Worker config
 
 Pairing:

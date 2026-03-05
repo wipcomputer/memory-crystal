@@ -123,11 +123,22 @@ For air-gapped environments, Ollama is the only option. No data leaves the machi
 
 For organizations with multiple offices or remote teams.
 
+**Architecture:** One Crystal Core (the primary embedder), many Crystal Nodes (capture and sync). Core is the only machine that writes embeddings. Nodes capture raw conversations and send them to Core. Core embeds, then pushes deltas back.
+
+**What syncs:**
+1. **Delta chunks** ... only new embeddings since last sync (not the full database)
+2. **Full file tree** ... the entire `~/.ldm/` directory: workspace files, daily logs, journals, media, everything an embedding references
+3. **Commands** ... bidirectional remote operations (run Dream Weaver, trigger backfill, request status)
+
+**How it works:**
 1. Each site runs Memory Crystal locally
-2. After each session, conversations are encrypted (AES-256-GCM) and signed (HMAC-SHA256)
-3. Encrypted blobs are dropped at a relay (hosted or self-hosted)
-4. Other sites poll, decrypt, and ingest into their local crystal.db
-5. The relay deletes blobs after pickup
+2. Core embeds all conversations into crystal.db (one source of truth for embeddings)
+3. New chunks + changed files are encrypted (AES-256-GCM) and signed (HMAC-SHA256)
+4. Encrypted deltas are dropped at a relay (hosted or self-hosted)
+5. Other sites poll, decrypt, and insert into their local crystal.db + file tree
+6. The relay deletes blobs after pickup
+
+**No cloud search.** Every node has the full database and full file tree. All search is local. The relay is pure transport. Nothing is stored or searchable in the cloud.
 
 **Self-hosted relay:** Deploy the Cloudflare Worker on your own Cloudflare account. Full control. No third-party data exposure.
 
@@ -197,7 +208,7 @@ crystal init --agent your-agent-id
 crystal status
 ```
 
-For enterprise deployments across multiple machines, see [Relay: Multi-Device Sync](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md).
+For enterprise deployments across multiple machines, see [Relay: Memory Sync](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md).
 
 For full technical details, see [Technical Documentation](https://github.com/wipcomputer/memory-crystal/blob/main/TECHNICAL.md).
 

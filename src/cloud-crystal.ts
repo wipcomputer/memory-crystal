@@ -1,10 +1,14 @@
 /// <reference types="@cloudflare/workers-types" />
 // cloud-crystal.ts — D1 + Vectorize backend for Memory Crystal Cloud.
+//
+// DEPRECATED: Demo/onboarding only. Not the production architecture.
+// With full LDM tree sync, every node has the complete database locally.
+// All search is local. Cloud search is unnecessary.
+// See RELAY.md and TECHNICAL.md for the production sync model.
+//
 // Implements the same search/remember/forget/status interface as the local Crystal,
 // but backed by Cloudflare D1 (SQL + FTS5) and Vectorize (vector search).
-//
-// Used by the cloud MCP Worker (worker-mcp.ts) for Tier 2 users.
-// Tier 1 users never hit this... their data goes through the encrypted relay only.
+// Used by the cloud MCP Worker (worker-mcp.ts) for demo/onboarding purposes.
 
 export interface CloudEnv {
   DB: D1Database;

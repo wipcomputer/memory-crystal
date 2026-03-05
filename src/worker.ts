@@ -4,8 +4,9 @@
 // The Worker cannot read what it holds.
 //
 // Channels:
-//   conversations — devices drop encrypted conversation chunks for Mini to pick up
-//   mirror        — Mini drops encrypted DB snapshot for devices to pick up
+//   conversations — devices drop encrypted conversation chunks for Core to pick up
+//   mirror        — Core drops encrypted delta chunks for Nodes to pick up
+//   files         — Core drops encrypted file tree deltas for Nodes to pick up
 //   commands      — Node sends commands to Core ("process my data", "run Dream Weaver")
 //                   Core sends results back ("processing complete", "mirror ready")
 //
@@ -51,7 +52,7 @@ function authenticate(request: Request, env: Env): AuthResult | Response {
 
 // ── Channel validation ──
 
-const VALID_CHANNELS = ['conversations', 'mirror', 'commands'];
+const VALID_CHANNELS = ['conversations', 'mirror', 'commands', 'files'];
 
 function isValidChannel(channel: string): boolean {
   return VALID_CHANNELS.includes(channel);
