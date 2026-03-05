@@ -114,12 +114,22 @@ export function detectInstallState(): InstallState {
 
   // MCP registered with Claude Code?
   let mcpRegistered = false;
-  try {
-    if (existsSync(CC_MCP)) {
-      const config = JSON.parse(readFileSync(CC_MCP, 'utf-8'));
-      mcpRegistered = !!(config?.mcpServers?.['memory-crystal']);
-    }
-  } catch {}
+  // Check .mcp.json files (project-level registrations)
+  for (const mcpPath of [CC_MCP, OC_MCP, join(process.cwd(), '.mcp.json')]) {
+    try {
+      if (existsSync(mcpPath)) {
+        const config = JSON.parse(readFileSync(mcpPath, 'utf-8'));
+        if (config?.mcpServers?.['memory-crystal']) { mcpRegistered = true; break; }
+      }
+    } catch {}
+  }
+  // Check user-scope via Claude CLI (claude mcp get returns exit 0 if registered)
+  if (!mcpRegistered) {
+    try {
+      execSync('claude mcp get memory-crystal 2>/dev/null', { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' });
+      mcpRegistered = true;
+    } catch {}
+  }
 
   // OpenClaw detected?
   const ocDetected = existsSync(join(OC_ROOT, 'openclaw.json'));
@@ -323,11 +333,11 @@ export function configureCCHook(): void {
 
 // ── MCP registration ──
 
-/** Register memory-crystal MCP server with Claude Code. */
+/** Register memory-crystal MCP server with Claude Code at user scope. */
 export function registerMCPServer(): void {
   const mcpServerPath = join(LDM_ROOT, 'extensions', 'memory-crystal', 'dist', 'mcp-server.js');
 
-  // Try using claude CLI first
+  // Try using claude CLI
   try {
     execSync(`claude mcp add --scope user memory-crystal -- node "${mcpServerPath}"`, {
       encoding: 'utf-8',
@@ -335,8 +345,19 @@ export function registerMCPServer(): void {
       timeout: 15000,
     });
     return;
-  } catch {
-    // claude CLI not available or failed; write .mcp.json directly
+  } catch (err: any) {
+    const output = (err.stderr || '') + (err.stdout || '');
+    // "already exists" means it's registered. To update the path, remove and re-add.
+    if (output.includes('already exists')) {
+      try {
+        execSync('claude mcp remove memory-crystal --scope user', { encoding: 'utf-8', stdio: 'pipe', timeout: 10000 });
+        execSync(`claude mcp add --scope user memory-crystal -- node "${mcpServerPath}"`, { encoding: 'utf-8', stdio: 'pipe', timeout: 15000 });
+      } catch {
+        // If re-add fails, the old registration still works
+      }
+      return;
+    }
+    // claude CLI not available; fall through to .mcp.json
   }
 
   // Fallback: write to ~/.claude/.mcp.json

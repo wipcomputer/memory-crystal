@@ -248,13 +248,30 @@ function checkRelayConfig(role: ReturnType<typeof detectRole>): DoctorCheck {
 }
 
 function checkMcpServer(): DoctorCheck {
-  const mcpPath = join(HOME, '.claude', '.mcp.json');
-  try {
-    if (existsSync(mcpPath)) {
-      const config = JSON.parse(readFileSync(mcpPath, 'utf-8'));
-      if (config.mcpServers && config.mcpServers['memory-crystal']) {
-        return { name: 'MCP Server', status: 'ok', detail: 'memory-crystal registered' };
+  // Check .mcp.json files (project-level registrations)
+  const candidates = [
+    join(HOME, '.claude', '.mcp.json'),       // user-level (legacy)
+    join(HOME, '.openclaw', '.mcp.json'),      // OpenClaw project-level
+    join(process.cwd(), '.mcp.json'),          // current project
+  ];
+
+  for (const mcpPath of candidates) {
+    try {
+      if (existsSync(mcpPath)) {
+        const config = JSON.parse(readFileSync(mcpPath, 'utf-8'));
+        if (config.mcpServers && config.mcpServers['memory-crystal']) {
+          return { name: 'MCP Server', status: 'ok', detail: `memory-crystal registered (${mcpPath.replace(HOME, '~')})` };
+        }
       }
+    } catch {}
+  }
+
+  // Check user-scope registration via Claude Code CLI
+  try {
+    const result = execSync('claude mcp get memory-crystal 2>&1', { encoding: 'utf-8', timeout: 5000 });
+    // If the command succeeds (no error), the server is registered
+    if (!result.includes('not found') && !result.includes('error')) {
+      return { name: 'MCP Server', status: 'ok', detail: 'memory-crystal registered (user scope)' };
     }
   } catch {}
 
@@ -262,7 +279,7 @@ function checkMcpServer(): DoctorCheck {
     name: 'MCP Server',
     status: 'warn',
     detail: 'memory-crystal not registered with Claude Code',
-    fix: 'claude mcp add --scope user memory-crystal -- crystal-mcp',
+    fix: 'claude mcp add --scope user memory-crystal -- node ~/.ldm/extensions/memory-crystal/dist/mcp-server.js',
   };
 }
 
