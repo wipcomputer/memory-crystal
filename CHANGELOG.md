@@ -4,6 +4,11 @@
 
 
 
+
+## 0.7.2 (2026-03-05)
+
+Fix MCP detection in doctor and installer to check project-level and user-scope registrations
+
 ## 0.7.1 (2026-03-05)
 
 Database backup, verification, and import in installer
