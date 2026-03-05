@@ -327,20 +327,27 @@ The same encryption key must be present on all devices. Options:
 1. **Crystal Node** (`cc-hook.ts` relay mode): Encrypts JSONL with AES-256-GCM, signs with HMAC-SHA256, drops at Cloudflare Worker. Can also send commands via `sendCommand()`.
 2. **Worker** (`worker.ts`): Stores encrypted blobs in R2 across three channels (`conversations`, `mirror`, `commands`). Pure dead drop. No decryption. Auto-cleans after 24h.
 3. **Crystal Core** (`poller.ts`): Polls Worker, downloads blobs, verifies HMAC, decrypts, ingests into crystal.db. Reconstructs remote agent's file tree (JSONL, MD summary, daily breadcrumb). Detects new agent IDs and routes to staging pipeline. Also polls commands channel and delivers to Crystal Core gateway.
-4. **Mirror sync** (`mirror-sync.ts`): Pushes encrypted crystal.db snapshot from Crystal Core to relay. Crystal Nodes pull and decrypt for local search.
+4. **Mirror sync** (`mirror-sync.ts`): Pushes delta chunks (new embeddings since last sync) + file tree deltas from Crystal Core to relay. Crystal Nodes pull, decrypt, and insert. Cold start gets a full export; after that, delta only.
 5. **Staging** (`staging.ts`): New agents from relay are staged before live ingest. Transcripts are written to `~/.ldm/staging/{agent_id}/`, then backfill + Dream Weaver full mode runs before promoting to live capture.
 
-### Cloud Memory & Search Architecture
+### Sync Model
 
-1. **Client** (ChatGPT/Claude): Connects via OAuth 2.1 (DCR + PKCE S256)
-2. **Worker** (`worker-mcp.ts`): Authenticates, routes MCP JSON-RPC to tool handlers
-3. **Backend** (`cloud-crystal.ts`): D1 for SQL + FTS5, Vectorize for vectors, RRF fusion
-4. **Relay bridge** (Tier 1): Encrypts and drops to R2 for Crystal Core pickup
+**Core is the only embedder.** All embeddings happen on the Core machine. Nodes never embed locally. This prevents split-brain where a node has embeddings that Core doesn't due to network issues.
 
-Three channels:
-- **conversations** (Node -> Core) ... encrypted conversation chunks (ephemeral)
-- **mirror** (Core -> Nodes) ... search-ready DB snapshot
+**Delta sync, not full mirror.** The mirror channel sends only new chunks since last sync, not the entire crystal.db (1.9 GB+). Payload size is proportional to activity, not corpus size. Cold start (new node) gets a one-time full export, then delta only.
+
+**Full LDM tree sync.** The relay syncs the entire `~/.ldm/` file tree, not just the database. Embeddings are pointers to artifacts (files, images, videos). If the artifact isn't on the node, the embedding is an orphan. Every file that an embedding references must exist on every device.
+
+**No cloud search.** Every node has the full database + full file tree. All search is local. The Cloud MCP server (D1 + Vectorize) exists as a demo/onboarding tool but is not the production architecture.
+
+Three relay channels:
+- **conversations** (Node -> Core) ... raw conversation chunks for Core to embed
+- **mirror** (Core -> Nodes) ... delta chunks (pre-embedded) + file tree deltas
 - **commands** (bidirectional) ... Nodes send commands ("run Dream Weaver"), Core sends results
+
+### Future: Native Apple Sync
+
+For Apple-to-Apple devices, a native app replaces the relay entirely. CloudKit handles encrypted sync. MLX Swift handles on-device search quality LLM. No Cloudflare Worker needed between Apple devices. Same delta model. The relay stays for non-Apple and cross-platform setups.
 
 ## Session Summaries
 
@@ -603,7 +610,7 @@ sqlite-vec runs inside a single SQLite file. Cloudflare Workers don't have persi
 ## More Info
 
 - [README.md](https://github.com/wipcomputer/memory-crystal/blob/main/README.md) ... What Memory Crystal is and how to install it.
-- [RELAY.md](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md) ... Relay: Multi-Device Sync, Cloud Memory & Search, QR pairing.
+- [RELAY.md](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md) ... Relay: Memory Sync, QR pairing, delta sync, file tree sync.
 
 ---
 

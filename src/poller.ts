@@ -7,14 +7,17 @@
 // Usage:
 //   node poller.js                    Poll once (cron mode)
 //   node poller.js --watch            Poll continuously (every 2 min)
-//   node poller.js --push-mirror      Export + encrypt + push mirror snapshot
+//   node poller.js --push-delta       Export + encrypt + push delta chunks
+//   node poller.js --push-delta --full Push all chunks (cold start / new node)
+//   node poller.js --push-mirror      Legacy alias for --push-delta --full
 //   node poller.js --status           Show relay status
 
-import { Crystal, resolveConfig, type Chunk } from './core.js';
-import { loadRelayKey, decryptJSON, encrypt, hashBuffer, type EncryptedPayload } from './crypto.js';
+import { Crystal, resolveConfig, type Chunk, type ExportedChunk } from './core.js';
+import { loadRelayKey, decryptJSON, encryptJSON, encrypt, hashBuffer, type EncryptedPayload } from './crypto.js';
 import { ensureLdm, ldmPaths, resolveStatePath, stateWritePath } from './ldm.js';
 import { generateSessionSummary, writeSummaryFile, type SummaryMessage } from './summarize.js';
 import { isNewAgent, ensureStaging, markReady } from './staging.js';
+import { pushFileSync } from './file-sync.js';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
@@ -26,6 +29,8 @@ interface PollerState {
   lastPoll: string | null;
   totalIngested: number;
   lastMirrorPush: string | null;
+  /** Watermark: highest chunk ID pushed to mirror channel (delta sync) */
+  lastDeltaChunkId: number;
 }
 
 function loadState(): PollerState {
@@ -34,7 +39,7 @@ function loadState(): PollerState {
       return JSON.parse(readFileSync(POLLER_STATE_PATH, 'utf-8'));
     }
   } catch {}
-  return { lastPoll: null, totalIngested: 0, lastMirrorPush: null };
+  return { lastPoll: null, totalIngested: 0, lastMirrorPush: null, lastDeltaChunkId: 0 };
 }
 
 function saveState(state: PollerState): void {
@@ -322,52 +327,85 @@ async function pollCommands(): Promise<void> {
   }
 }
 
-// ── Push mirror snapshot ──
+// ── Push delta chunks (replaces full mirror) ──
 
-async function pushMirror(): Promise<void> {
+interface DeltaPayload {
+  version: number;
+  sinceId: number;
+  maxId: number;
+  chunkCount: number;
+  pushedAt: string;
+  chunks: ExportedChunk[];
+}
+
+async function pushDelta(force?: boolean): Promise<void> {
   if (!RELAY_URL || !RELAY_TOKEN) {
     throw new Error('CRYSTAL_RELAY_URL and CRYSTAL_RELAY_TOKEN must be set');
   }
 
   const relayKey = loadRelayKey();
   const config = resolveConfig();
-  const paths = ldmPaths();
-  const dbPath = existsSync(paths.crystalDb) ? paths.crystalDb : join(config.dataDir, 'crystal.db');
+  const crystal = new Crystal(config);
+  await crystal.init();
 
-  if (!existsSync(dbPath)) {
-    throw new Error(`Crystal DB not found at ${dbPath}`);
+  const state = loadState();
+  const sinceId = force ? 0 : (state.lastDeltaChunkId || 0);
+  const maxId = crystal.getMaxChunkId();
+
+  if (maxId <= sinceId) {
+    process.stderr.write(`[relay-poller] no new chunks since ID ${sinceId}\n`);
+    return;
   }
 
-  // Read the DB file
-  const dbData = readFileSync(dbPath);
-  const dbHash = hashBuffer(dbData);
+  const chunks = crystal.exportChunksSince(sinceId);
+  if (chunks.length === 0) {
+    process.stderr.write(`[relay-poller] no new chunks to push\n`);
+    return;
+  }
 
-  // Build mirror payload: hash + encrypted DB
-  const mirrorMeta = JSON.stringify({ hash: dbHash, size: dbData.length, pushed_at: new Date().toISOString() });
-  const metaEncrypted = encrypt(Buffer.from(mirrorMeta, 'utf-8'), relayKey);
-  const dbEncrypted = encrypt(dbData, relayKey);
+  const deltaPayload: DeltaPayload = {
+    version: Crystal.DELTA_VERSION,
+    sinceId,
+    maxId,
+    chunkCount: chunks.length,
+    pushedAt: new Date().toISOString(),
+    chunks,
+  };
 
-  const payload = JSON.stringify({
-    meta: metaEncrypted,
-    db: dbEncrypted,
-  });
+  // Encrypt the delta payload
+  const encrypted = encryptJSON(deltaPayload, relayKey);
 
-  // Drop at Worker
+  // Drop at Worker mirror channel
   const resp = await fetch(`${RELAY_URL}/drop/mirror`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${RELAY_TOKEN}`,
       'Content-Type': 'application/octet-stream',
     },
-    body: payload,
+    body: JSON.stringify(encrypted),
   });
 
   if (!resp.ok) {
-    throw new Error(`Mirror push failed: ${resp.status} ${await resp.text()}`);
+    throw new Error(`Delta push failed: ${resp.status} ${await resp.text()}`);
   }
 
-  const result = await resp.json() as any;
-  process.stderr.write(`[relay-poller] mirror pushed: ${(dbData.length / 1024 / 1024).toFixed(1)}MB, hash=${dbHash.slice(0, 12)}...\n`);
+  // Update watermark
+  state.lastDeltaChunkId = maxId;
+  state.lastMirrorPush = new Date().toISOString();
+  saveState(state);
+
+  const payloadSize = JSON.stringify(encrypted).length;
+  process.stderr.write(
+    `[relay-poller] delta pushed: ${chunks.length} chunks (ID ${sinceId + 1}..${maxId}), ` +
+    `${(payloadSize / 1024).toFixed(1)}KB\n`
+  );
+}
+
+// ── Legacy: Push full mirror (for cold start / new nodes) ──
+
+async function pushMirror(): Promise<void> {
+  // Full mirror is now just a delta with sinceId=0
+  await pushDelta(true);
 }
 
 // ── CLI ──
@@ -382,16 +420,15 @@ if (args.includes('--status')) {
   console.log(`  Mode:           ${mode}`);
   console.log(`  Last poll:      ${state.lastPoll || 'never'}`);
   console.log(`  Total ingested: ${state.totalIngested}`);
-  console.log(`  Last mirror:    ${state.lastMirrorPush || 'never'}`);
+  console.log(`  Last delta:     ${state.lastMirrorPush || 'never'}`);
+  console.log(`  Delta watermark: chunk ID ${state.lastDeltaChunkId || 0}`);
   process.exit(0);
 }
 
-if (args.includes('--push-mirror')) {
-  pushMirror()
+if (args.includes('--push-mirror') || args.includes('--push-delta')) {
+  const full = args.includes('--full');
+  pushDelta(full)
     .then(() => {
-      const state = loadState();
-      state.lastMirrorPush = new Date().toISOString();
-      saveState(state);
       process.exit(0);
     })
     .catch(err => {
@@ -414,14 +451,22 @@ if (args.includes('--push-mirror')) {
 
         if (ingested > 0) {
           process.stderr.write(`[relay-poller] poll complete: ${ingested} ingested, ${errors} errors\n`);
-          // Push mirror after successful ingestion
+          // Push delta chunks after successful ingestion
           try {
-            await pushMirror();
-            state.lastMirrorPush = new Date().toISOString();
-            saveState(state);
-          } catch (mirrorErr: any) {
-            process.stderr.write(`[relay-poller] mirror push failed (non-fatal): ${mirrorErr.message}\n`);
+            await pushDelta();
+          } catch (deltaErr: any) {
+            process.stderr.write(`[relay-poller] delta push failed (non-fatal): ${deltaErr.message}\n`);
           }
+        }
+
+        // Push file tree sync (runs even without new chunks ... files change independently)
+        try {
+          const { manifest, files } = await pushFileSync();
+          if (files > 0) {
+            process.stderr.write(`[relay-poller] file sync pushed: ${files} files\n`);
+          }
+        } catch (fileSyncErr: any) {
+          process.stderr.write(`[relay-poller] file sync failed (non-fatal): ${fileSyncErr.message}\n`);
         }
       } catch (err: any) {
         process.stderr.write(`[relay-poller] poll error: ${err.message}\n`);

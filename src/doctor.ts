@@ -24,44 +24,127 @@ export async function runDoctor(): Promise<DoctorCheck[]> {
   const role = detectRole();
   const paths = ldmPaths();
 
-  // 1. Role
+  // 1. Version + deployment
+  checks.push(checkVersion());
+
+  // 2. Role
   checks.push({
     name: 'Role',
     status: 'ok',
     detail: `${role.role} (${role.source})`,
   });
 
-  // 2. Database
+  // 3. Database
   checks.push(await checkDatabase(paths.crystalDb));
 
-  // 3. Embedding provider
+  // 4. Embedding provider
   checks.push(checkEmbeddingProvider(role.role));
 
-  // 4. Capture cron
+  // 5. Capture cron
   checks.push(checkCaptureCron());
 
-  // 5. Relay config
+  // 6. CC Stop hook
+  checks.push(checkCCHook());
+
+  // 7. Relay config
   checks.push(checkRelayConfig(role));
 
-  // 6. MCP server (memory-crystal)
+  // 8. MCP server (memory-crystal)
   checks.push(checkMcpServer());
 
-  // 7. Backup
+  // 9. Backup
   checks.push(checkBackup());
 
-  // 8. Bridge
+  // 10. Bridge
   checks.push(checkBridge());
 
-  // 9. LDM directory
+  // 11. LDM directory
   checks.push(checkLdmDirectory(paths));
 
-  // 10. Private mode
+  // 12. Private mode
   checks.push(checkPrivateMode());
 
   return checks;
 }
 
 // ── Individual checks ──
+
+function checkVersion(): DoctorCheck {
+  const ldmExtPkg = join(HOME, '.ldm', 'extensions', 'memory-crystal', 'package.json');
+  const ocExtPkg = join(HOME, '.openclaw', 'extensions', 'memory-crystal', 'package.json');
+
+  let installedVersion: string | null = null;
+  try {
+    if (existsSync(ldmExtPkg)) {
+      const pkg = JSON.parse(readFileSync(ldmExtPkg, 'utf-8'));
+      installedVersion = pkg.version;
+    }
+  } catch {}
+
+  if (!installedVersion) {
+    return {
+      name: 'Version',
+      status: 'warn',
+      detail: 'not deployed to ~/.ldm/extensions/memory-crystal/',
+      fix: 'crystal init',
+    };
+  }
+
+  // Check OC deployment
+  let ocVersion: string | null = null;
+  try {
+    if (existsSync(ocExtPkg)) {
+      const pkg = JSON.parse(readFileSync(ocExtPkg, 'utf-8'));
+      ocVersion = pkg.version;
+    }
+  } catch {}
+
+  const locations: string[] = [`LDM v${installedVersion}`];
+  if (ocVersion) locations.push(`OC v${ocVersion}`);
+
+  // Check for version mismatch between LDM and OC
+  if (ocVersion && ocVersion !== installedVersion) {
+    return {
+      name: 'Version',
+      status: 'warn',
+      detail: `${locations.join(', ')} (version mismatch)`,
+      fix: 'crystal update',
+    };
+  }
+
+  return {
+    name: 'Version',
+    status: 'ok',
+    detail: locations.join(', '),
+  };
+}
+
+function checkCCHook(): DoctorCheck {
+  const settingsPath = join(HOME, '.claude', 'settings.json');
+  try {
+    if (existsSync(settingsPath)) {
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+      const stopHooks = settings?.hooks?.Stop;
+      if (Array.isArray(stopHooks)) {
+        const found = stopHooks.some((entry: any) => {
+          const hooks = entry?.hooks;
+          if (!Array.isArray(hooks)) return false;
+          return hooks.some((h: any) => h?.command?.includes('memory-crystal') && h?.command?.includes('cc-hook'));
+        });
+        if (found) {
+          return { name: 'CC Hook', status: 'ok', detail: 'Stop hook configured' };
+        }
+      }
+    }
+  } catch {}
+
+  return {
+    name: 'CC Hook',
+    status: 'warn',
+    detail: 'Stop hook not configured in ~/.claude/settings.json',
+    fix: 'crystal init',
+  };
+}
 
 async function checkDatabase(dbPath: string): Promise<DoctorCheck> {
   if (!existsSync(dbPath)) {

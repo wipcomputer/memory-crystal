@@ -1,10 +1,16 @@
 /// <reference types="@cloudflare/workers-types" />
 // worker-mcp.ts — Memory Crystal Cloud MCP Server.
+//
+// DEPRECATED: This is a demo/onboarding server only. Not the production architecture.
+// With full LDM tree sync (delta chunks + file sync), every node has the complete
+// database and file tree. All search is local. Cloud search is unnecessary.
+// See RELAY.md and TECHNICAL.md for the production sync model.
+//
 // Remote MCP server for ChatGPT and Claude (all surfaces).
 // OAuth 2.1 + DCR, Streamable HTTP, 4 memory tools.
 //
-// Tier 1 (Sovereign): remember encrypts + relays to Mini, search says "local only"
-// Tier 2 (Convenience): remember + search via D1 + Vectorize
+// Tier 1 (Sovereign): remember encrypts + relays to Core, search says "local only"
+// Tier 2 (Convenience): remember + search via D1 + Vectorize (demo only)
 //
 // Deployed as a separate Cloudflare Worker from the relay (worker.ts).
 

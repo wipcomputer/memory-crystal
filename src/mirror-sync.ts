@@ -1,38 +1,62 @@
 #!/usr/bin/env node
-// memory-crystal/mirror-sync.ts — Device-side mirror pull.
-// Pulls encrypted DB snapshot from relay Worker, verifies integrity,
-// decrypts, and replaces local read-only crystal mirror.
+// memory-crystal/mirror-sync.ts — Node-side delta sync.
+// Pulls encrypted delta chunks from relay Worker, decrypts, and imports
+// pre-embedded chunks into local crystal.db. No re-embedding needed.
+//
+// Replaces the old full-DB mirror approach. Core pushes only new chunks
+// since last sync (delta). Node inserts them with their pre-computed vectors.
 //
 // Usage:
-//   node mirror-sync.js              Pull latest mirror (if available)
+//   node mirror-sync.js              Pull latest delta (if available)
 //   node mirror-sync.js --status     Show mirror state
 //   node mirror-sync.js --force      Pull even if current mirror is recent
 
-import { loadRelayKey, decrypt, decryptJSON, hashBuffer, type EncryptedPayload } from './crypto.js';
+import { Crystal, resolveConfig, type ExportedChunk } from './core.js';
+import { loadRelayKey, decryptJSON, type EncryptedPayload } from './crypto.js';
 import { ldmPaths, resolveStatePath, stateWritePath } from './ldm.js';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { pullFileSync } from './file-sync.js';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 const RELAY_URL = process.env.CRYSTAL_RELAY_URL || '';
 const RELAY_TOKEN = process.env.CRYSTAL_RELAY_TOKEN || '';
 const _ldmPaths = ldmPaths();
-const MIRROR_DIR = join(_ldmPaths.root, 'memory');
-const MIRROR_DB_PATH = _ldmPaths.crystalDb;
 const MIRROR_STATE_PATH = resolveStatePath('mirror-sync-state.json');
+
+interface DeltaPayload {
+  version: number;
+  sinceId: number;
+  maxId: number;
+  chunkCount: number;
+  pushedAt: string;
+  chunks: ExportedChunk[];
+}
 
 interface MirrorState {
   lastSync: string | null;
   lastHash: string | null;
   lastSize: number | null;
+  /** Watermark: highest chunk ID received from Core */
+  lastDeltaChunkId: number;
+  /** Total chunks imported via delta sync */
+  totalImported: number;
 }
 
 function loadState(): MirrorState {
   try {
     if (existsSync(MIRROR_STATE_PATH)) {
-      return JSON.parse(readFileSync(MIRROR_STATE_PATH, 'utf-8'));
+      const state = JSON.parse(readFileSync(MIRROR_STATE_PATH, 'utf-8'));
+      // Migration: add new fields if missing
+      return {
+        lastSync: state.lastSync || null,
+        lastHash: state.lastHash || null,
+        lastSize: state.lastSize || null,
+        lastDeltaChunkId: state.lastDeltaChunkId || 0,
+        totalImported: state.totalImported || 0,
+      };
     }
   } catch {}
-  return { lastSync: null, lastHash: null, lastSize: null };
+  return { lastSync: null, lastHash: null, lastSize: null, lastDeltaChunkId: 0, totalImported: 0 };
 }
 
 function saveState(state: MirrorState): void {
@@ -40,9 +64,9 @@ function saveState(state: MirrorState): void {
   writeFileSync(writePath, JSON.stringify(state, null, 2));
 }
 
-// ── Pull mirror ──
+// ── Pull delta ──
 
-async function pullMirror(force: boolean): Promise<boolean> {
+async function pullDelta(force: boolean): Promise<boolean> {
   if (!RELAY_URL || !RELAY_TOKEN) {
     throw new Error('CRYSTAL_RELAY_URL and CRYSTAL_RELAY_TOKEN must be set');
   }
@@ -61,84 +85,92 @@ async function pullMirror(force: boolean): Promise<boolean> {
   const listData = await listResp.json() as { count: number; blobs: Array<{ id: string; size: number; dropped_at: string }> };
 
   if (listData.count === 0) {
-    process.stderr.write('[mirror-sync] no mirror available\n');
+    process.stderr.write('[mirror-sync] no delta available\n');
     return false;
   }
 
-  // Take the latest blob (last in list by drop time)
-  const latestBlob = listData.blobs[listData.blobs.length - 1];
+  // Initialize crystal for import
+  const config = resolveConfig();
+  const crystal = new Crystal(config);
+  await crystal.init();
 
-  // Fetch the encrypted mirror
-  const blobResp = await fetch(`${RELAY_URL}/pickup/mirror/${latestBlob.id}`, {
-    headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
-  });
-
-  if (!blobResp.ok) {
-    throw new Error(`Mirror fetch failed: ${blobResp.status}`);
-  }
-
-  const encryptedText = await blobResp.text();
-  const mirrorPayload = JSON.parse(encryptedText) as { meta: EncryptedPayload; db: EncryptedPayload };
-
-  // Decrypt metadata
-  const meta = decryptJSON<{ hash: string; size: number; pushed_at: string }>(mirrorPayload.meta, relayKey);
-
-  // Check if we already have this version
   const state = loadState();
-  if (!force && state.lastHash === meta.hash) {
-    process.stderr.write('[mirror-sync] mirror is already up to date\n');
-    return false;
-  }
+  let totalImported = 0;
 
-  // Decrypt the DB
-  const dbData = decrypt(mirrorPayload.db, relayKey);
-
-  // Verify integrity
-  const actualHash = hashBuffer(dbData);
-  if (actualHash !== meta.hash) {
-    throw new Error(
-      `Mirror integrity check failed!\n` +
-      `  Expected: ${meta.hash}\n` +
-      `  Got:      ${actualHash}\n` +
-      `Mirror REJECTED — keeping existing local mirror.`
-    );
-  }
-
-  // Atomic replace: write to temp, then rename
-  if (!existsSync(MIRROR_DIR)) mkdirSync(MIRROR_DIR, { recursive: true });
-  const tmpPath = MIRROR_DB_PATH + '.tmp';
-  writeFileSync(tmpPath, dbData);
-
-  // Backup existing mirror
-  if (existsSync(MIRROR_DB_PATH)) {
-    const backupPath = MIRROR_DB_PATH + '.bak';
-    try { renameSync(MIRROR_DB_PATH, backupPath); } catch {}
-  }
-
-  renameSync(tmpPath, MIRROR_DB_PATH);
-
-  // Update state
-  state.lastSync = new Date().toISOString();
-  state.lastHash = meta.hash;
-  state.lastSize = dbData.length;
-  saveState(state);
-
-  process.stderr.write(
-    `[mirror-sync] updated: ${(dbData.length / 1024 / 1024).toFixed(1)}MB, ` +
-    `hash=${meta.hash.slice(0, 12)}..., pushed=${meta.pushed_at}\n`
-  );
-
-  // Confirm receipt — Worker deletes all mirror blobs
+  // Process all available delta blobs (oldest first)
   for (const blob of listData.blobs) {
     try {
+      const blobResp = await fetch(`${RELAY_URL}/pickup/mirror/${blob.id}`, {
+        headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+      });
+
+      if (!blobResp.ok) {
+        process.stderr.write(`[mirror-sync] failed to fetch blob ${blob.id}: ${blobResp.status}\n`);
+        continue;
+      }
+
+      const encryptedText = await blobResp.text();
+      const encrypted = JSON.parse(encryptedText) as EncryptedPayload;
+
+      // Decrypt delta payload
+      let delta: DeltaPayload;
+      try {
+        delta = decryptJSON<DeltaPayload>(encrypted, relayKey);
+      } catch (err: any) {
+        process.stderr.write(`[mirror-sync] blob ${blob.id} failed verification: ${err.message} — DISCARDED\n`);
+        // Delete bad blob
+        await fetch(`${RELAY_URL}/confirm/mirror/${blob.id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+        });
+        continue;
+      }
+
+      // Skip if we already have these chunks (unless forced)
+      if (!force && delta.maxId <= state.lastDeltaChunkId) {
+        process.stderr.write(`[mirror-sync] blob ${blob.id} already applied (maxId ${delta.maxId} <= watermark ${state.lastDeltaChunkId})\n`);
+        // Confirm receipt to clean up relay
+        await fetch(`${RELAY_URL}/confirm/mirror/${blob.id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+        });
+        continue;
+      }
+
+      // Import pre-embedded chunks (dedup by hash happens inside importChunks)
+      const imported = crystal.importChunks(delta.chunks);
+      totalImported += imported;
+
+      // Update watermark
+      if (delta.maxId > state.lastDeltaChunkId) {
+        state.lastDeltaChunkId = delta.maxId;
+      }
+
+      process.stderr.write(
+        `[mirror-sync] blob ${blob.id}: ${imported}/${delta.chunkCount} chunks imported ` +
+        `(ID ${delta.sinceId + 1}..${delta.maxId}), pushed=${delta.pushedAt}\n`
+      );
+
+      // Confirm receipt
       await fetch(`${RELAY_URL}/confirm/mirror/${blob.id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
       });
-    } catch {} // Best effort cleanup
+    } catch (err: any) {
+      process.stderr.write(`[mirror-sync] error processing blob ${blob.id}: ${err.message}\n`);
+    }
   }
 
-  return true;
+  // Update state
+  state.lastSync = new Date().toISOString();
+  state.totalImported += totalImported;
+  saveState(state);
+
+  if (totalImported > 0) {
+    process.stderr.write(`[mirror-sync] done: ${totalImported} chunks imported, watermark=${state.lastDeltaChunkId}\n`);
+  }
+
+  return totalImported > 0;
 }
 
 // ── CLI ──
@@ -147,20 +179,31 @@ const args = process.argv.slice(2);
 
 if (args.includes('--status')) {
   const state = loadState();
-  const hasDb = existsSync(MIRROR_DB_PATH);
+  const paths = ldmPaths();
+  const hasDb = existsSync(paths.crystalDb);
   console.log('Mirror sync status:');
-  console.log(`  Relay URL:    ${RELAY_URL || '(not set)'}`);
-  console.log(`  Local mirror: ${hasDb ? MIRROR_DB_PATH : '(none)'}`);
-  console.log(`  Last sync:    ${state.lastSync || 'never'}`);
-  console.log(`  Last hash:    ${state.lastHash ? state.lastHash.slice(0, 16) + '...' : '(none)'}`);
-  console.log(`  Last size:    ${state.lastSize ? (state.lastSize / 1024 / 1024).toFixed(1) + 'MB' : '(none)'}`);
+  console.log(`  Relay URL:       ${RELAY_URL || '(not set)'}`);
+  console.log(`  Local crystal:   ${hasDb ? paths.crystalDb : '(none)'}`);
+  console.log(`  Last sync:       ${state.lastSync || 'never'}`);
+  console.log(`  Delta watermark: chunk ID ${state.lastDeltaChunkId}`);
+  console.log(`  Total imported:  ${state.totalImported}`);
   process.exit(0);
 }
 
 const force = args.includes('--force');
 
-pullMirror(force)
-  .then(updated => {
+pullDelta(force)
+  .then(async (updated) => {
+    // Also pull file tree sync
+    try {
+      const { imported, deleted } = await pullFileSync();
+      if (imported > 0 || deleted > 0) {
+        process.stderr.write(`[mirror-sync] file sync: ${imported} imported, ${deleted} deleted\n`);
+      }
+    } catch (err: any) {
+      process.stderr.write(`[mirror-sync] file sync failed (non-fatal): ${err.message}\n`);
+    }
+
     if (updated) {
       process.stderr.write('[mirror-sync] done\n');
     }

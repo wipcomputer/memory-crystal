@@ -37,29 +37,31 @@ Your agent will read the repo, explain everything, and walk you through setup in
 
 ## Memory Crystal Features
 
-**Intelligent Install**
-- When installing from Claude Code CLI or OpenClaw, **Memory Crystal** discovers your existing AI sessions automatically. Installs the Learning Dreaming Machines Operating System (**LDM OS**) and creates a living memory system. From this point forward, every conversation is captured, archived, and embedded into searchable memory
-- Choose to install as **Crystal Core** (all your memories) or **Crystal Node** (a **Crystal Core** mirror)
-
 **Local Memory**
 - All your AI conversations stored locally, searchable in one place. Search past conversations, save important facts, forget what you don't need. Your complete memory. It stays with you, shared across all your AIs
 - *Stable*
   - *Verified:* Claude Code CLI + OpenClaw
   - *Unverified:* Other MCP-compatible clients and CLIs
 
-**Multi-Device Sync**
-- AIs on different machines and different networks relay their memories back to your **Crystal Core**. End-to-end encrypted. Searchable only from your local machine or private infrastructure
+**Multi-Device Memory**
+- AIs set up as **Crystal Nodes** relay their memories back to your **Crystal Core**. Your **Crystal Core** relays all memories back to every node. End-to-end encrypted
+- Your **Crystal Core** is the source of truth. Your node copy can be wiped and rebuilt at any time
 - Uses Cloudflare infrastructure to transfer encrypted data between your devices
   - *Hosted:* Use WIP.computer relay infrastructure. Currently free for individual use
   - *Self-hosted:* Deploy your own relay on your own Cloudflare account. Full sovereignty
-- Read more about [**Relay: Multi-Device Sync**](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md)
+- Read more about [**Relay: Memory Sync**](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md)
 - *Beta (early access)*
 
-**Cloud Memory**
-- A **Crystal Node** in the cloud. Search all your AIs from anywhere in the world
-- Your **Crystal Core** is the source of truth. The cloud copy can be wiped and rebuilt at any time
-- Read more about [**Cloud Memory & Search**](https://github.com/wipcomputer/memory-crystal/blob/main/TECHNICAL.md#cloud-memory--search-architecture)
+**AI-to-AI Communication**
+- Your AIs talk to each other on the same machine or any network machine. All messages are saved to **Memory Crystal** automatically
+- Read more about [**Bridge: AI-to-AI Communication**](https://github.com/wipcomputer/wip-bridge)
 - *Beta (early access)*
+  - *Verified:* Claude Code CLI + OpenClaw on the same device
+  - *Unverified:* Network devices
+
+**Intelligent Install**
+- When installing from Claude Code CLI or OpenClaw, **Memory Crystal** discovers your existing AI sessions automatically. Installs the Learning Dreaming Machines Operating System (**LDM OS**) and creates a living memory system. From this point forward, every conversation is captured, archived, and embedded into searchable memory
+- Choose to install as **Crystal Core** (all your memories) or **Crystal Node** (a **Crystal Core** mirror)
 
 **Import Memories**
 - **Total Recall** ... Connect your AI accounts (Anthropic, OpenAI, xAI/Grok). Every conversation gets pulled and run through the **Dream Weaver Protocol**, consolidating them into **Memory Crystal** as truly lived, searchable memories
@@ -69,13 +71,6 @@ Your agent will read the repo, explain everything, and walk you through setup in
 - [**Dream Weaver Protocol**](https://github.com/wipcomputer/dream-weaver-protocol) ... Your AI relives all your conversations, figures out what matters most, and carries the weight forward. Like dreaming, the AI consolidates memories for better understanding. Read the paper: [Dream Weaver Protocol PDF](https://github.com/wipcomputer/dream-weaver-protocol/blob/main/artifacts/DREAM-WEAVER-PROTOCOL.pdf)
 - *Stable*
   - Compatible with all installations of **Memory Crystal**
-
-**AI-to-AI Communication**
-- Your AIs talk to each other on the same machine or any network machine. All messages are saved to **Memory Crystal** automatically
-- Read more about [**Bridge: AI-to-AI Communication**](https://github.com/wipcomputer/wip-bridge)
-- *Beta (early access)*
-  - *Verified:* Claude Code CLI + OpenClaw on the same device
-  - *Unverified:* Network devices
 
 **Backups**
 - Automated backups of all of your memories to a directory and location of your choosing: iCloud, external drive, Dropbox, or wherever you trust

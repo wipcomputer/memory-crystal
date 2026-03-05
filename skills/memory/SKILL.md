@@ -22,6 +22,12 @@ After install, the AI remembers everything. Past conversations are searchable. I
 
 ---
 
+## Intelligent Install & Update
+
+When installing from Claude Code CLI or OpenClaw, Memory Crystal discovers your existing AI sessions automatically. Installs the Learning Dreaming Machines Operating System (LDM OS) and creates a living memory system. From this point forward, every conversation is captured, archived, and embedded into searchable memory. Choose to install as Crystal Core (all your memories) or Crystal Node (a Crystal Core mirror).
+
+If already installed, `crystal init` detects the current version and updates in place. Code gets updated. Data never gets touched.
+
 ## Install
 
 **You are an AI agent helping a user install Memory Crystal. Walk them through the process step by step. Ask questions, explain what you're doing, and let them make choices.**
@@ -86,7 +92,14 @@ Before installing, explain exactly what will be created:
 crystal init
 ```
 
-This scaffolds `~/.ldm/`, deploys the capture and backup scripts, and installs a cron job. Safe to run multiple times.
+This does everything: scaffolds `~/.ldm/`, deploys code to `~/.ldm/extensions/memory-crystal/`, configures the Claude Code Stop hook, registers the MCP server, deploys capture and backup scripts, and installs a cron job. If OpenClaw is detected, it deploys the OC plugin too. Safe to run multiple times. If already installed, it detects the version and updates if needed.
+
+You can also specify a role during init:
+
+```bash
+crystal init --core          # Install as Crystal Core
+crystal init --node --pair mc1:...   # Install as Node with pairing code
+```
 
 **Core recommendation:** If this machine is always on (desktop, server, Mac mini), it should be your Crystal Core. The Core is the master memory. It does all embeddings and is the source of truth. If you're on a laptop, you can still install standalone. But when you're ready, you'll want a Core running on something permanent.
 
@@ -128,17 +141,21 @@ export GOOGLE_API_KEY="..."
 
 ### Step 3: Connect to your AI
 
-**Detect what the user is running and install for ALL of them.** Check for each:
+`crystal init` already handled the main connections automatically:
+- **Claude Code CLI:** Stop hook configured in `~/.claude/settings.json`, MCP server registered
+- **OpenClaw:** If detected, plugin deployed to `~/.openclaw/extensions/memory-crystal/`
 
-#### Claude Code CLI
+Verify the connections worked by running `crystal doctor`. If the MCP server or hook checks show warnings, fix them manually:
 
-If the user is talking to you through Claude Code CLI (you are running as `claude`), install the MCP server:
+#### Claude Code CLI (manual fallback)
+
+If `crystal init` couldn't register the MCP server automatically:
 
 ```bash
-claude mcp add --scope user memory-crystal -- crystal-mcp
+claude mcp add --scope user memory-crystal -- node ~/.ldm/extensions/memory-crystal/dist/mcp-server.js
 ```
 
-Then restart Claude Code (the user needs to exit and re-open, or run `/mcp` to reconnect).
+Then restart Claude Code (exit and re-open, or run `/mcp` to reconnect).
 
 After restart, you will have these tools: `crystal_search`, `crystal_remember`, `crystal_forget`, `crystal_status`.
 
@@ -156,7 +173,8 @@ If it exists, read the file and add the memory-crystal MCP server to it:
 {
   "mcpServers": {
     "memory-crystal": {
-      "command": "crystal-mcp"
+      "command": "node",
+      "args": ["~/.ldm/extensions/memory-crystal/dist/mcp-server.js"]
     }
   }
 }
@@ -164,22 +182,17 @@ If it exists, read the file and add the memory-crystal MCP server to it:
 
 Merge this into the existing config (don't overwrite other servers). Tell the user to restart Claude Desktop.
 
-#### OpenClaw
+#### OpenClaw (manual fallback)
 
-Check if OpenClaw is installed:
-
-```bash
-which openclaw 2>/dev/null || ls ~/.openclaw/openclaw.json 2>/dev/null
-```
-
-If OpenClaw is present, install Memory Crystal as a plugin:
+If `crystal init` didn't deploy to OpenClaw automatically:
 
 ```bash
-openclaw plugins install memory-crystal
+cp -r ~/.ldm/extensions/memory-crystal/{dist,skills,package.json,openclaw.plugin.json} ~/.openclaw/extensions/memory-crystal/
+cd ~/.openclaw/extensions/memory-crystal && npm install --omit=dev
 openclaw gateway restart
 ```
 
-**Important: if you detect multiple runtimes, install for ALL of them.** They share the same database. Tell the user: "I found Claude Code and OpenClaw on your system. I'm installing Memory Crystal for both so all your AIs share the same memory."
+**All runtimes share the same database.** Tell the user: "All your AIs share one memory at `~/.ldm/memory/crystal.db`."
 
 ### Step 4: Bridge (AI-to-AI Communication)
 
@@ -229,6 +242,35 @@ crystal search "test"
 ```
 
 If that works, tell the user: "Memory Crystal is installed. From now on, I can search our past conversations, remember important things, and share memory with your other AI tools. Try asking me 'do you remember what we talked about last week?'"
+
+---
+
+## Update
+
+If Memory Crystal is already installed and a new version is available, update it:
+
+> "Update Memory Crystal to the latest version"
+
+The AI runs:
+
+```bash
+crystal update
+```
+
+This detects the installed version, shows what will change, and deploys the new code. It updates:
+- Code in `~/.ldm/extensions/memory-crystal/dist/`
+- Code in `~/.openclaw/extensions/memory-crystal/dist/` (if OpenClaw is present)
+- Skills and package manifests
+- CC Stop hook path (if changed)
+- MCP server registration (if needed)
+
+It never touches:
+- `~/.ldm/memory/crystal.db` (your data)
+- `~/.ldm/state/*` (watermarks, role state)
+- `~/.ldm/secrets/*` (relay key)
+- `~/.ldm/agents/*` (agent data, transcripts, daily logs)
+
+After the update, run `crystal doctor` to verify everything is working. If the update changed hook paths or MCP registration, restart Claude Code.
 
 ---
 

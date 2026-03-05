@@ -51,6 +51,20 @@ export interface Chunk {
   created_at: string;          // ISO timestamp
 }
 
+/** Pre-embedded chunk for delta sync. Includes embedding vector so Nodes don't re-embed. */
+export interface ExportedChunk {
+  id: number;
+  text: string;
+  text_hash: string;
+  role: string;
+  source_type: string;
+  source_id: string;
+  agent_id: string;
+  token_count: number;
+  created_at: string;
+  embedding: number[] | null;
+}
+
 export interface Memory {
   id?: number;
   text: string;
@@ -600,6 +614,100 @@ export class Crystal {
     }
 
     return newChunks.length;
+  }
+
+  // ── Delta Sync (export/import pre-embedded chunks) ──
+
+  /** Export interface for delta sync payloads. */
+  static readonly DELTA_VERSION = 1;
+
+  /** Export chunks with IDs greater than sinceId. Returns pre-embedded chunks for delta sync.
+   *  Core calls this to build delta payloads for Nodes. */
+  exportChunksSince(sinceId: number): ExportedChunk[] {
+    const db = this.sqliteDb!;
+
+    // Get chunks with metadata
+    const rows = db.prepare(`
+      SELECT c.id, c.text, c.text_hash, c.role, c.source_type, c.source_id,
+             c.agent_id, c.token_count, c.created_at, v.embedding
+      FROM chunks c
+      LEFT JOIN chunks_vec v ON v.chunk_id = c.id
+      WHERE c.id > ?
+      ORDER BY c.id ASC
+    `).all(sinceId) as Array<{
+      id: number; text: string; text_hash: string; role: string;
+      source_type: string; source_id: string; agent_id: string;
+      token_count: number; created_at: string; embedding: Buffer | null;
+    }>;
+
+    return rows.map(row => ({
+      id: row.id,
+      text: row.text,
+      text_hash: row.text_hash,
+      role: row.role,
+      source_type: row.source_type,
+      source_id: row.source_id,
+      agent_id: row.agent_id,
+      token_count: row.token_count,
+      created_at: row.created_at,
+      // Convert Float32Array buffer to number[] for JSON serialization
+      embedding: row.embedding ? Array.from(new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4)) : null,
+    }));
+  }
+
+  /** Get the highest chunk ID in the database. Used for watermark tracking. */
+  getMaxChunkId(): number {
+    const db = this.sqliteDb!;
+    const row = db.prepare('SELECT MAX(id) as maxId FROM chunks').get() as { maxId: number | null };
+    return row.maxId || 0;
+  }
+
+  /** Import pre-embedded chunks from Core. Node calls this to apply delta payloads.
+   *  Skips chunks that already exist (by text_hash). Does NOT re-embed. */
+  importChunks(exported: ExportedChunk[]): number {
+    if (exported.length === 0) return 0;
+    const db = this.sqliteDb!;
+
+    // Ensure vec table exists (use first chunk's embedding dimensions)
+    const firstWithEmbed = exported.find(c => c.embedding && c.embedding.length > 0);
+    if (firstWithEmbed && !this.vecDimensions) {
+      this.ensureVecTable(firstWithEmbed.embedding!.length);
+    }
+
+    const insertChunk = db.prepare(`
+      INSERT INTO chunks (text, text_hash, role, source_type, source_id, agent_id, token_count, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertVec = db.prepare(`
+      INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)
+    `);
+    const checkHash = db.prepare('SELECT 1 FROM chunks WHERE text_hash = ?');
+
+    let imported = 0;
+
+    const transaction = db.transaction(() => {
+      for (const chunk of exported) {
+        // Dedup by hash
+        if (checkHash.get(chunk.text_hash)) continue;
+
+        const result = insertChunk.run(
+          chunk.text, chunk.text_hash, chunk.role, chunk.source_type,
+          chunk.source_id, chunk.agent_id, chunk.token_count, chunk.created_at
+        );
+
+        if (chunk.embedding && chunk.embedding.length > 0) {
+          const chunkId = typeof result.lastInsertRowid === 'bigint'
+            ? result.lastInsertRowid
+            : BigInt(result.lastInsertRowid);
+          insertVec.run(chunkId, new Float32Array(chunk.embedding));
+        }
+
+        imported++;
+      }
+    });
+    transaction();
+
+    return imported;
   }
 
   // ── Recency helpers ──
