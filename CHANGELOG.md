@@ -3,6 +3,11 @@
 
 
 
+
+## 0.7.1 (2026-03-05)
+
+Database backup, verification, and import in installer
+
 ## 0.7.0 (2026-03-05)
 
 Delta sync, file sync, intelligent install & update

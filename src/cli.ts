@@ -40,7 +40,7 @@ Commands:
 
   crystal serve [--port 18790]                Crystal Core gateway (localhost HTTP server)
   crystal dream-weave [--agent <id>] [--mode full|incremental] [--dry-run] [--since <datetime>]
-  crystal init [--agent <id>] [--core] [--node] [--pair <code>] [--yes] [--skip-discover]
+  crystal init [--agent <id>] [--core] [--node] [--pair <code>] [--import <path>] [--yes] [--skip-discover]
                                               Install or update Memory Crystal
   crystal update [--agent <id>] [--yes]       Update existing install (alias for init --update)
   crystal backfill [--agent <id>] [--dry-run] [--limit <n>]  Embed raw sessions into crystal
@@ -507,6 +507,7 @@ async function handleLdmCommand(command: string, flags: Record<string, string>, 
       agentId,
       role,
       pairCode: flags.pair,
+      importDb: flags.import,
       yes: 'yes' in flags || 'y' in flags,
       skipDiscover: 'skip-discover' in flags,
     });

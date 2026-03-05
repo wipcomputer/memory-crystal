@@ -378,6 +378,68 @@ export function registerOcMCPServer(): void {
   writeFileSync(OC_MCP, JSON.stringify(config, null, 2) + '\n');
 }
 
+// ── Database safety ──
+
+/** Back up crystal.db before deploying new code. Returns the backup path. */
+export function backupCrystalDb(): string {
+  const paths = ldmPaths();
+  const dbPath = paths.crystalDb;
+
+  if (!existsSync(dbPath)) {
+    throw new Error(`crystal.db not found at ${dbPath}`);
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const backupPath = `${dbPath}.pre-update-${timestamp}`;
+
+  copyFileSync(dbPath, backupPath);
+
+  // Also copy WAL and SHM if they exist (SQLite write-ahead log)
+  const walPath = dbPath + '-wal';
+  const shmPath = dbPath + '-shm';
+  if (existsSync(walPath)) copyFileSync(walPath, backupPath + '-wal');
+  if (existsSync(shmPath)) copyFileSync(shmPath, backupPath + '-shm');
+
+  // Verify the backup is readable
+  const origSize = statSync(dbPath).size;
+  const backupSize = statSync(backupPath).size;
+  if (backupSize !== origSize) {
+    throw new Error(`Backup size mismatch: original ${origSize}, backup ${backupSize}`);
+  }
+
+  return backupPath;
+}
+
+/** Verify the new code can open and read the existing crystal.db without errors. */
+export async function verifyCrystalDbReadable(): Promise<void> {
+  const paths = ldmPaths();
+  const dbPath = paths.crystalDb;
+
+  if (!existsSync(dbPath)) return; // No DB to verify
+
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    // Check that the chunks table exists and is readable
+    const row = db.prepare('SELECT COUNT(*) as count FROM chunks').get() as any;
+    if (typeof row.count !== 'number') {
+      throw new Error('chunks table returned unexpected data');
+    }
+
+    // Check schema version if tracked
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table'"
+    ).all() as any[];
+    const tableNames = tables.map((t: any) => t.name);
+
+    if (!tableNames.includes('chunks')) {
+      throw new Error('chunks table missing from database');
+    }
+  } finally {
+    db.close();
+  }
+}
+
 // ── Update display ──
 
 /** Show what changed between versions. Returns a human-readable summary. */
@@ -405,6 +467,8 @@ export interface InstallResult {
   version: string;
   deployedTo: string[];
   steps: string[];
+  dbStatus?: 'existing' | 'imported' | 'fresh' | 'none';
+  chunkCount?: number;
 }
 
 /** Run the full install or update flow. Returns a summary of what was done. */
@@ -412,6 +476,7 @@ export async function runInstallOrUpdate(options: {
   agentId?: string;
   role?: 'core' | 'node';
   pairCode?: string;
+  importDb?: string;
   yes?: boolean;
   skipDiscover?: boolean;
 }): Promise<InstallResult> {
@@ -419,6 +484,8 @@ export async function runInstallOrUpdate(options: {
   const state = detectInstallState();
   const steps: string[] = [];
   const deployedTo: string[] = [];
+  let dbStatus: 'existing' | 'imported' | 'fresh' | 'none' = 'none';
+  let chunkCount = 0;
 
   const isFresh = !state.ldmExists || state.installedVersion === null;
   const isUpdate = !isFresh && state.needsUpdate;
@@ -436,7 +503,82 @@ export async function runInstallOrUpdate(options: {
   scaffoldLdm(agentId);
   steps.push(`LDM scaffolded for agent "${agentId}"`);
 
-  // Step 2: Deploy code to LDM extensions
+  // Step 2: Database awareness
+  if (state.crystalDbExists) {
+    // Existing database found. Report what we see.
+    try {
+      const { default: Database } = await import('better-sqlite3');
+      const db = new Database(ldmPaths().crystalDb, { readonly: true });
+      const row = db.prepare('SELECT COUNT(*) as count FROM chunks').get() as any;
+      chunkCount = row.count;
+      db.close();
+      dbStatus = 'existing';
+      steps.push(`Existing database found: ${chunkCount.toLocaleString()} chunks in crystal.db`);
+    } catch {
+      dbStatus = 'existing';
+      steps.push('Existing database found (could not read chunk count)');
+    }
+
+    // Back up before touching anything
+    try {
+      const backupPath = backupCrystalDb();
+      steps.push(`Database backed up to ${backupPath}`);
+    } catch (err: any) {
+      steps.push(`Database backup FAILED: ${err.message}`);
+      return {
+        action: 'up-to-date',
+        version: state.repoVersion,
+        deployedTo: [],
+        steps: [...steps, 'Aborted. Fix the backup issue before retrying.'],
+        dbStatus,
+      };
+    }
+
+    // Verify new code can read existing DB
+    try {
+      await verifyCrystalDbReadable();
+      steps.push('Database read verification passed');
+    } catch (err: any) {
+      steps.push(`Database read verification FAILED: ${err.message}`);
+      return {
+        action: 'up-to-date',
+        version: state.repoVersion,
+        deployedTo: [],
+        steps: [...steps, 'Aborted. New code cannot read existing database.'],
+        dbStatus,
+      };
+    }
+  } else if (options.importDb) {
+    // User provided a database to import
+    const importPath = options.importDb;
+    if (!existsSync(importPath)) {
+      steps.push(`Import path not found: ${importPath}`);
+    } else {
+      try {
+        const paths = ldmPaths();
+        mkdirSync(join(paths.root, 'memory'), { recursive: true });
+        copyFileSync(importPath, paths.crystalDb);
+
+        // Verify the imported DB
+        const { default: Database } = await import('better-sqlite3');
+        const db = new Database(paths.crystalDb, { readonly: true });
+        const row = db.prepare('SELECT COUNT(*) as count FROM chunks').get() as any;
+        chunkCount = row.count;
+        db.close();
+
+        dbStatus = 'imported';
+        steps.push(`Database imported: ${chunkCount.toLocaleString()} chunks from ${importPath}`);
+      } catch (err: any) {
+        steps.push(`Database import failed: ${err.message}`);
+      }
+    }
+  } else {
+    // Fresh install, no database
+    dbStatus = 'fresh';
+    steps.push('No existing database. A new one will be created on first capture.');
+  }
+
+  // Step 4: Deploy code to LDM extensions
   const ldmResult = deployToLdm();
   steps.push(`Code deployed to ${ldmResult.extensionDir}`);
   deployedTo.push(ldmResult.extensionDir);
@@ -555,5 +697,7 @@ export async function runInstallOrUpdate(options: {
     version: state.repoVersion,
     deployedTo,
     steps,
+    dbStatus,
+    chunkCount,
   };
 }
