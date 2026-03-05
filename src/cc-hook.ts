@@ -1,7 +1,11 @@
 #!/usr/bin/env node
-// memory-crystal/cc-hook.ts — Claude Code Stop hook handler.
-// Triggered after every Claude Code response. Reads the session JSONL,
-// extracts new turns since last watermark.
+// memory-crystal/cc-hook.ts — Claude Code Stop hook (redundancy).
+// Runs as a Stop hook in Claude Code settings.json. Acts as a final flush
+// to catch anything the cron-based poller (cc-poller.ts) hasn't picked up yet.
+//
+// The cron job is the PRIMARY capture path (runs every minute).
+// This hook is the BACKUP. If the poller already captured everything,
+// this is a no-op (watermark is already current).
 //
 // Two modes:
 //   LOCAL:  Ingests directly into local crystal (Mini)
@@ -17,22 +21,19 @@
 
 import { Crystal, RemoteCrystal, resolveConfig, createCrystal, type Chunk } from './core.js';
 import { loadRelayKey, encryptJSON } from './crypto.js';
-import { ensureLdm, ldmPaths } from './ldm.js';
+import { ensureLdm, ldmPaths, resolveStatePath, stateWritePath } from './ldm.js';
 import {
   readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync,
   statSync, openSync, readSync, closeSync, copyFileSync,
 } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 
-const HOME = process.env.HOME || '';
 const CC_AGENT_ID = process.env.CRYSTAL_AGENT_ID || 'cc-mini';
 const RELAY_URL = process.env.CRYSTAL_RELAY_URL || '';
 const RELAY_TOKEN = process.env.CRYSTAL_RELAY_TOKEN || '';
-const OC_DIR = join(HOME, '.openclaw');
-const LDM_DAILY = join(HOME, '.ldm', 'agents', CC_AGENT_ID, 'memory', 'daily');
-const PRIVATE_MODE_PATH = join(OC_DIR, 'memory', 'memory-capture-state.json');
-const WATERMARK_PATH = join(OC_DIR, 'memory', 'cc-capture-watermark.json');
-const CC_ENABLED_PATH = join(OC_DIR, 'memory', 'cc-capture-enabled.json');
+const PRIVATE_MODE_PATH = resolveStatePath('memory-capture-state.json');
+const WATERMARK_PATH = resolveStatePath('cc-capture-watermark.json');
+const CC_ENABLED_PATH = resolveStatePath('cc-capture-enabled.json');
 
 // ── Mode detection ──
 
@@ -68,9 +69,8 @@ function isCaptureEnabled(): boolean {
 }
 
 function setCaptureEnabled(enabled: boolean): void {
-  const dir = dirname(CC_ENABLED_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(CC_ENABLED_PATH, JSON.stringify({
+  const writePath = stateWritePath('cc-capture-enabled.json');
+  writeFileSync(writePath, JSON.stringify({
     enabled,
     updatedAt: new Date().toISOString(),
   }, null, 2));
@@ -93,10 +93,9 @@ function loadWatermark(): Watermark {
 }
 
 function saveWatermark(wm: Watermark): void {
-  const dir = dirname(WATERMARK_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const writePath = stateWritePath('cc-capture-watermark.json');
   wm.lastRun = new Date().toISOString();
-  writeFileSync(WATERMARK_PATH, JSON.stringify(wm, null, 2));
+  writeFileSync(writePath, JSON.stringify(wm, null, 2));
 }
 
 // ── JSONL parsing ──
@@ -265,6 +264,41 @@ async function dropAtRelay(messages: ExtractedMessage[]): Promise<number> {
   return 0;
 }
 
+// ── Relay commands: send commands to Core ──
+
+export async function sendCommand(command: {
+  action: string;
+  agent_id?: string;
+  mode?: string;
+}): Promise<void> {
+  if (!RELAY_URL || !RELAY_TOKEN) {
+    throw new Error('Relay not configured. Set CRYSTAL_RELAY_URL and CRYSTAL_RELAY_TOKEN.');
+  }
+
+  const relayKey = loadRelayKey();
+  const payload = {
+    ...command,
+    from_agent: CC_AGENT_ID,
+    sent_at: new Date().toISOString(),
+  };
+
+  const encrypted = encryptJSON(payload, relayKey);
+  const body = JSON.stringify(encrypted);
+
+  const resp = await fetch(`${RELAY_URL}/drop/commands`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${RELAY_TOKEN}`,
+      'Content-Type': 'application/octet-stream',
+    },
+    body,
+  });
+
+  if (!resp.ok) {
+    throw new Error(`Command relay failed: ${resp.status} ${await resp.text()}`);
+  }
+}
+
 // ── Local mode: direct ingest with batched retry ──
 
 const BATCH_SIZE = 200;
@@ -378,13 +412,12 @@ async function main(): Promise<void> {
   const wm = loadWatermark();
   const fileKey = transcriptPath;
 
-  // First time: seed watermark at current size (skip old history)
+  // First encounter: start from byte 0 (capture everything).
+  // The old behavior seeded at end-of-file, which SKIPPED all existing history.
+  // The cron poller is the primary path and always starts from 0.
+  // The Stop hook should match that behavior.
   if (!wm.files[fileKey]) {
-    const size = statSync(transcriptPath).size;
-    wm.files[fileKey] = { lastByteOffset: size, lastTimestamp: new Date().toISOString() };
-    saveWatermark(wm);
-    process.stderr.write(`[cc-memory-capture] seeded ${basename(transcriptPath)} at ${size} bytes\n`);
-    process.exit(0);
+    wm.files[fileKey] = { lastByteOffset: 0, lastTimestamp: new Date().toISOString() };
   }
 
   const lastOffset = wm.files[fileKey].lastByteOffset || 0;
@@ -398,8 +431,8 @@ async function main(): Promise<void> {
 
   const totalTokens = messages.reduce((sum, m) => sum + Math.ceil(m.text.length / 4), 0);
 
-  // Min threshold
-  if (totalTokens < 500) {
+  // Min threshold (matches poller)
+  if (totalTokens < 100) {
     wm.files[fileKey] = { lastByteOffset: newByteOffset, lastTimestamp: new Date().toISOString() };
     saveWatermark(wm);
     process.exit(0);
@@ -435,18 +468,9 @@ async function main(): Promise<void> {
       writeSummaryFile(paths.sessions, summary, agentId, sessionId);
     } catch {} // Summary failure is non-fatal
 
-    // Auto dev updates (local mode only — Mini handles this)
-    if (mode === 'local') {
-      try {
-        const { runDevUpdate } = await import('./dev-update.js');
-        const result = runDevUpdate('cc');
-        if (result.reposUpdated > 0) {
-          process.stderr.write(`[cc-dev-update] wrote ${result.reposUpdated} dev updates\n`);
-        }
-      } catch (devErr: any) {
-        process.stderr.write(`[cc-dev-update] failed (non-fatal): ${devErr.message}\n`);
-      }
-    }
+    // Dev updates disabled (2026-02-28). Was auto-generating files in every repo's
+    // ai/ folder after each session. Created noise, not signal. If we bring this back,
+    // it should be opt-in per repo, not a blanket scan.
   } catch (err: any) {
     process.stderr.write(`[cc-memory-capture] error: ${err.message}\n`);
     process.exit(1);

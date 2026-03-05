@@ -6,9 +6,9 @@
 
 ## All your AI tools. One shared memory. Private, searchable, sovereign.
 
-Stop starting over. Memory Crystal lets all your AIs remember you ... together.
+Memory Crystal lets all your AIs remember you ... together.
 
-You use multiple AIs. They don't talk to each other. They don't remember what the others know. You keep re-explaining yourself. Have you ever thought to yourself ... ***why isn't this all connected?***
+You use multiple AIs. They don't talk to each other. They can't search what the others know. Have you ever thought to yourself ... ***why isn't this all connected?***
 
 **Memory Crystal** fixes this.
 
@@ -20,6 +20,7 @@ Open your AI and say:
 
 ```
 Read the SKILL.md at github.com/wipcomputer/memory-crystal/blob/main/skills/memory/SKILL.md.
+
 Then explain to me:
 1. What is this tool?
 2. What does it do?
@@ -28,36 +29,64 @@ Then explain to me:
 Then ask me:
 - Do you have more questions?
 - Do you want to install it?
+
+If I say yes, run: crystal init
 ```
 
 Your agent will read the repo, explain everything, and walk you through setup interactively.
 
-## Features
+## Memory Crystal Features
 
-One product, three capabilities.
+**Intelligent Install**
+- When installing from Claude Code CLI or OpenClaw, **Memory Crystal** discovers your existing AI sessions automatically. Installs the Learning Dreaming Machines Operating System (**LDM OS**) and creates a living memory system. From this point forward, every conversation is captured, archived, and embedded into searchable memory
+- Choose to install as **Crystal Core** (all your memories) or **Crystal Node** (a **Crystal Core** mirror)
 
-### Memory
+**Local Memory**
+- All your AI conversations stored locally, searchable in one place. Search past conversations, save important facts, forget what you don't need. Your complete memory. It stays with you, shared across all your AIs
+- *Stable*
+  - *Verified:* Claude Code CLI + OpenClaw
+  - *Unverified:* Other MCP-compatible clients and CLIs
 
-**Memory Crystal.** Your AIs remember you. Search past conversations, save important facts, forget what you don't need. Your memory stays with you, not locked inside one platform.
+**Multi-Device Sync**
+- AIs on different machines and different networks relay their memories back to your **Crystal Core**. End-to-end encrypted. Searchable only from your local machine or private infrastructure
+- Uses Cloudflare infrastructure to transfer encrypted data between your devices
+  - *Hosted:* Use WIP.computer relay infrastructure. Currently free for individual use
+  - *Self-hosted:* Deploy your own relay on your own Cloudflare account. Full sovereignty
+- Read more about [**Relay: Multi-Device Sync**](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md)
+- *Beta (early access)*
 
-*Works with:* Claude Code CLI, OpenClaw TUI. Also works via Claude Code Remote (macOS/iOS). Should work with any CLI or app that supports MCP.
+**Cloud Memory**
+- A **Crystal Node** in the cloud. Search all your AIs from anywhere in the world
+- Your **Crystal Core** is the source of truth. The cloud copy can be wiped and rebuilt at any time
+- Read more about [**Cloud Memory & Search**](https://github.com/wipcomputer/memory-crystal/blob/main/TECHNICAL.md#cloud-memory--search-architecture)
+- *Beta (early access)*
 
-### AI-to-AI Communication (local and worldwide)
+**Import Memories**
+- **Total Recall** ... Connect your AI accounts (Anthropic, OpenAI, xAI/Grok). Every conversation gets pulled and run through the **Dream Weaver Protocol**, consolidating them into **Memory Crystal** as truly lived, searchable memories
+- *Beta (early access)*
 
-**Bridge** (private beta). Your AIs talk to each other on the same machine. All messages are saved to Memory Crystal automatically.
+**Memory Consolidation**
+- [**Dream Weaver Protocol**](https://github.com/wipcomputer/dream-weaver-protocol) ... Your AI relives all your conversations, figures out what matters most, and carries the weight forward. Like dreaming, the AI consolidates memories for better understanding. Read the paper: [Dream Weaver Protocol PDF](https://github.com/wipcomputer/dream-weaver-protocol/blob/main/artifacts/DREAM-WEAVER-PROTOCOL.pdf)
+- *Stable*
+  - Compatible with all installations of **Memory Crystal**
 
-*Works with:* Claude Code CLI, OpenClaw TUI
+**AI-to-AI Communication**
+- Your AIs talk to each other on the same machine or any network machine. All messages are saved to **Memory Crystal** automatically
+- Read more about [**Bridge: AI-to-AI Communication**](https://github.com/wipcomputer/wip-bridge)
+- *Beta (early access)*
+  - *Verified:* Claude Code CLI + OpenClaw on the same device
+  - *Unverified:* Network devices
 
-**Relay** (private beta). AIs on different machines and different networks communicate and remember each other's memories. End-to-end encrypted.
+**Backups**
+- Automated backups of all of your memories to a directory and location of your choosing: iCloud, external drive, Dropbox, or wherever you trust
+- *Beta (early access)*
 
-Read more about [**Relay**](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md), multi-device sync.
 
 ## More Info
 
 - [**Technical Documentation**](https://github.com/wipcomputer/memory-crystal/blob/main/TECHNICAL.md) ... How **Memory Crystal** works, architecture, search, encryption, design decisions.
-- [**Memory Crystal for Enterprise**](https://github.com/wipcomputer/memory-crystal/blob/main/README-ENTERPRISE.md) ... Give every AI in your company shared memory. Codebase, BD, legal, ops, creative. Run your company intelligently.
-- **Total Recall** (private beta) ... Connect your AI accounts (Anthropic, OpenAI, xAI/Grok). Every conversation gets pulled and run through the **Dream Weaver Protocol**, consolidating them into **Memory Crystal** as truly lived, searchable memories.
-- [**Dream Weaver Protocol**](https://github.com/wipcomputer/dream-weaver-protocol) ... Your AI relives all your conversations, figures out what matters most, and carries the weight forward. Like dreaming, the AI consolidates memories for better understanding.
+- [**Memory Crystal for Enterprise**](https://github.com/wipcomputer/memory-crystal/blob/main/README-ENTERPRISE.md) ... Give every AI in your company shared memory. Codebase, BD, legal, ops, creative. Run your company intelligently. *In testing.*
+
 ## Letters from the Other Side: What We Built
 
 We just built a sovereign memory system for AI agents.
@@ -80,8 +109,8 @@ Any device. Any agent. Any interface. One searchable memory that travels with yo
 ## License
 
 ```
-src/, skills/, cli.ts, mcp-server.ts   MIT    (use anywhere, no restrictions)
-worker/                                AGPL   (relay server)
+src/core.ts, cli.ts, mcp-server.ts, skills/   MIT    (use anywhere, no restrictions)
+src/worker.ts, src/worker-mcp.ts               AGPL   (relay + cloud server)
 ```
 
 AGPL for personal use is free.

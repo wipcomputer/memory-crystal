@@ -5,13 +5,14 @@
 import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
+import { resolveStatePath, stateWritePath } from './ldm.js';
 
 const HOME = process.env.HOME || '';
 const STAFF_DIR = join(HOME, 'Documents', 'wipcomputer--mac-mini-01', 'staff');
 const CC_REPOS = join(STAFF_DIR, 'Parker', 'Claude Code - Mini', 'repos');
 const LESA_REPOS = join(STAFF_DIR, 'Lēsa', 'repos');
 const DEV_UPDATES_DIR = join(CC_REPOS, 'wip-dev-updates'); // Legacy, kept for fallback
-const LAST_RUN_PATH = join(HOME, '.openclaw', 'memory', 'dev-update-last-run.json');
+const LAST_RUN_PATH = resolveStatePath('dev-update-last-run.json');
 
 interface LastRun {
   timestamp: string;
@@ -29,9 +30,8 @@ function loadLastRun(): LastRun | null {
 }
 
 function saveLastRun(run: LastRun): void {
-  const dir = join(HOME, '.openclaw', 'memory');
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(LAST_RUN_PATH, JSON.stringify(run, null, 2));
+  const writePath = stateWritePath('dev-update-last-run.json');
+  writeFileSync(writePath, JSON.stringify(run, null, 2));
 }
 
 function git(repoPath: string, cmd: string): string {

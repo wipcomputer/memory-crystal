@@ -1,0 +1,17 @@
+# Private content ... never publish to npm
+ai/
+.wrangler/
+.claude/
+.env
+.env.*
+!.env.example
+
+# Dev files
+*.ts
+!dist/**
+tsconfig.json
+tsconfig.*.json
+
+# Old/backup files
+README-old.md
+LETTERS.md
