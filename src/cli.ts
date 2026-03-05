@@ -13,7 +13,7 @@ const USAGE = `
 crystal — Sovereign memory system
 
 Commands:
-  crystal search <query> [-n limit] [--agent <id>] [--provider <openai|ollama|google>]
+  crystal search <query> [-n limit] [--agent <id>] [--since <time>] [--deep] [--provider <openai|ollama|google>]
   crystal remember <text> [--category fact|preference|event|opinion|skill]
   crystal forget <id>
   crystal status [--provider <openai|ollama|google>]
@@ -67,7 +67,7 @@ async function main() {
   const flags: Record<string, string> = {};
   let positional: string[] = [];
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === '--dry-run' || args[i] === '--yes' || args[i] === '-y' || args[i] === '--skip-discover' || args[i] === '--include-secrets') {
+    if (args[i] === '--dry-run' || args[i] === '--yes' || args[i] === '-y' || args[i] === '--skip-discover' || args[i] === '--include-secrets' || args[i] === '--deep') {
       flags[args[i].replace(/^-+/, '')] = 'true';
     } else if (args[i].startsWith('--') || args[i] === '-n') {
       const key = args[i].replace(/^-+/, '');
@@ -263,8 +263,8 @@ async function main() {
         const limit = parseInt(flags.n || '5', 10);
         const filter: any = {};
         if (flags.agent) filter.agent_id = flags.agent;
-
-        const results = await crystal.search(query, limit, filter);
+        if (flags.since) filter.since = flags.since;
+        const results = await crystal.deepSearch(query, limit, filter);
         if (results.length === 0) {
           console.log('No results found.');
         } else {

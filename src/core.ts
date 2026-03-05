@@ -605,9 +605,25 @@ export class Crystal {
   // ── Recency helpers ──
 
   private recencyWeight(ageDays: number): number {
-    // Linear decay with floor at 0.5. Old stuff never fully disappears
-    // but fresh context wins ties. ~50 days to hit the floor.
-    return Math.max(0.5, 1.0 - ageDays * 0.01);
+    // Exponential decay: fresh content gets strong boost, rapid falloff.
+    // Floor 0.3 so old stuff never fully disappears.
+    // Half-life ~7 days. Day 0: 1.0, Day 1: 0.90, Day 3: 0.74, Day 7: 0.50, Day 14: 0.25 (floor 0.3)
+    return Math.max(0.3, Math.exp(-ageDays * 0.1));
+  }
+
+  /** Parse relative time strings ("24h", "7d", "30d") or ISO dates into ISO date strings. */
+  private parseSince(since: string): string | undefined {
+    // Relative: "24h", "7d", "30d"
+    const match = since.match(/^(\d+)(h|d)$/);
+    if (match) {
+      const [, num, unit] = match;
+      const ms = unit === 'h' ? parseInt(num) * 3600000 : parseInt(num) * 86400000;
+      return new Date(Date.now() - ms).toISOString();
+    }
+    // ISO date or datetime
+    const parsed = new Date(since);
+    if (!isNaN(parsed.getTime())) return parsed.toISOString();
+    return undefined;
   }
 
   private freshnessLabel(ageDays: number): "fresh" | "recent" | "aging" | "stale" {
@@ -619,7 +635,7 @@ export class Crystal {
 
   // ── Search (Hybrid: BM25 + Vector + RRF fusion + Recency) ──
 
-  async search(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string }): Promise<SearchResult[]> {
+  async search(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string }): Promise<SearchResult[]> {
     const db = this.sqliteDb!;
 
     // Check if sqlite-vec has been populated (migration complete)
@@ -635,13 +651,16 @@ export class Crystal {
       return this.searchLanceFallback(query, limit, filter);
     }
 
-    const [embedding] = await this.embed([query]);
-    const fetchLimit = Math.max(limit * 3, 30);
+    // Parse since filter into ISO date string
+    const sinceDate = filter?.since ? this.parseSince(filter.since) : undefined;
 
-    // Run FTS and vector search, then fuse with RRF
-    const vecResults = this.searchVec(embedding, fetchLimit, filter);
-    const ftsResults = this.searchFTS(query, fetchLimit, filter);
-    const fused = this.reciprocalRankFusion([ftsResults, vecResults], [1.0, 1.0]);
+    const [embedding] = await this.embed([query]);
+    const fetchLimit = Math.max(limit * 5, 50);
+
+    // Run FTS and vector search, then fuse with RRF. BM25 gets 2x weight.
+    const vecResults = this.searchVec(embedding, fetchLimit, { ...filter, sinceDate });
+    const ftsResults = this.searchFTS(query, fetchLimit, { ...filter, sinceDate });
+    const fused = this.reciprocalRankFusion([ftsResults, vecResults], [2.0, 1.0]);
 
     // Apply recency weighting on top of fused scores
     const now = Date.now();
@@ -661,8 +680,15 @@ export class Crystal {
     return scored.sort((a, b) => b.score - a.score).slice(0, limit);
   }
 
+  /** Deep search: query expansion + LLM re-ranking + position-aware blending.
+   *  Falls back to standard search if no LLM provider is available. */
+  async deepSearch(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string }): Promise<SearchResult[]> {
+    const { deepSearch: deepSearchFn } = await import('./search-pipeline.js');
+    return deepSearchFn(this, query, { limit, filter });
+  }
+
   /** Vector search via sqlite-vec. Two-step pattern: MATCH first, then JOIN. */
-  private searchVec(embedding: number[], limit: number, filter?: { agent_id?: string; source_type?: string }): SearchResult[] {
+  private searchVec(embedding: number[], limit: number, filter?: { agent_id?: string; source_type?: string; sinceDate?: string }): SearchResult[] {
     const db = this.sqliteDb!;
 
     if (!this.vecDimensions) return [];
@@ -687,6 +713,7 @@ export class Crystal {
 
     if (filter?.agent_id) { sql += ' AND agent_id = ?'; params.push(filter.agent_id); }
     if (filter?.source_type) { sql += ' AND source_type = ?'; params.push(filter.source_type); }
+    if (filter?.sinceDate) { sql += ' AND created_at >= ?'; params.push(filter.sinceDate); }
 
     const rows = db.prepare(sql).all(...params) as Array<{
       id: number; text: string; role: string; source_type: string;
@@ -705,7 +732,7 @@ export class Crystal {
   }
 
   /** Full-text search via FTS5 with BM25 scoring. */
-  private searchFTS(query: string, limit: number, filter?: { agent_id?: string; source_type?: string }): SearchResult[] {
+  private searchFTS(query: string, limit: number, filter?: { agent_id?: string; source_type?: string; sinceDate?: string }): SearchResult[] {
     const db = this.sqliteDb!;
     const ftsQuery = this.buildFTS5Query(query);
     if (!ftsQuery) return [];
@@ -721,6 +748,7 @@ export class Crystal {
 
     if (filter?.agent_id) { sql += ' AND c.agent_id = ?'; params.push(filter.agent_id); }
     if (filter?.source_type) { sql += ' AND c.source_type = ?'; params.push(filter.source_type); }
+    if (filter?.sinceDate) { sql += ' AND c.created_at >= ?'; params.push(filter.sinceDate); }
 
     sql += ' ORDER BY bm25_score LIMIT ?';
     params.push(limit);

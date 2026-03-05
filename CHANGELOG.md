@@ -1,6 +1,11 @@
 # Changelog
 
 
+
+## 0.6.1 (2026-03-05)
+
+Search quality: deep search with LLM query expansion + re-ranking, MCP sampling design, updated docs
+
 ## 0.6.0 (2026-03-04)
 
 Dream Weaver integration, Crystal Core gateway, staging pipeline, commands channel.

@@ -51,6 +51,8 @@ sqlite-vec (vectors) + FTS5 (BM25) + SQLite (metadata)
     |-- crystal-serve.ts  -> Crystal Core gateway (localhost:18790)
     |-- dream-weaver.ts   -> Dream Weaver integration (narrative consolidation)
     |-- staging.ts        -> New agent staging pipeline
+    |-- llm.ts            -> LLM provider cascade (MLX > Ollama > OpenAI > Anthropic)
+    |-- search-pipeline.ts -> Deep search (expand, search, RRF, rerank, blend)
     +-- worker.ts         -> Encrypted relay (multi-site sync, 3 channels)
 ```
 
@@ -70,15 +72,25 @@ One core module. Multiple interfaces. Every interface calls the same search engi
 
 ## Retrieval Quality
 
-Hybrid search is not "we added vectors." It's a retrieval engine.
+Hybrid search is not "we added vectors." It's a two-tier retrieval engine with LLM-powered deep search.
 
+### Fast Path (Hybrid Search)
 - **FTS5 BM25** for exact keyword matches (Porter stemming)
 - **sqlite-vec cosine similarity** for semantic matches
-- **Reciprocal Rank Fusion** merges both result lists (k=60, rank-weighted)
-- **Recency weighting** ensures fresh context wins ties: `max(0.5, 1.0 - age_days * 0.01)`
+- **Reciprocal Rank Fusion** merges both result lists (k=60, tiered weights: BM25 2x, vector 1x)
+- **Recency weighting** ensures fresh context wins decisively: exponential decay `max(0.3, exp(-age_days * 0.1))`
 - **Content deduplication** via SHA-256 hash prevents duplicate embeddings
+- **Time-filtered search** ... restrict results to last 24h, 7d, 30d, or any date range
 
-A search for "deployment policy" finds conversations containing those exact words (BM25) and conversations about "shipping code to production" (vector similarity). Both matter. Both surface.
+### Deep Search (LLM-Powered, default)
+- **Query expansion** ... LLM generates 3 search variations (lexical, semantic, hypothetical document). Each runs through hybrid search. Results merged via RRF.
+- **Strong signal detection** ... BM25 probe skips expansion when the answer is obvious (saves latency).
+- **LLM re-ranking** ... top 40 candidates scored by LLM for relevance to the original query.
+- **Position-aware blending** ... trusts RRF for top positions, lets the reranker fix ordering in the tail.
+
+Deep search runs by default. Falls back to fast path silently if no LLM provider is available. For air-gapped environments, MLX (Apple Silicon) or Ollama provides free, fully local deep search with no API keys and no network.
+
+A search for "deployment policy" finds conversations containing those exact words (BM25), conversations about "shipping code to production" (vector similarity), and conversations about "release workflow" that the LLM recognizes as relevant. All three matter. All three surface.
 
 ## What Gets Stored
 

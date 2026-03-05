@@ -134,8 +134,10 @@ Local:
            |                 |                    |
       core.ts ... pure logic, zero framework deps
       |-- cli.ts            -> crystal search, dream-weave, backfill, serve
-      |-- mcp-server.ts     -> crystal_search (Claude Code, Claude Desktop)
+      |-- mcp-server.ts     -> crystal_search (Claude Code, Claude Desktop) + MCP sampling
       |-- openclaw.ts       -> plugin (OpenClaw agents) + raw data sync to LDM
+      |-- llm.ts            -> LLM provider cascade, query expansion, re-ranking
+      |-- search-pipeline.ts -> deep search pipeline (expand, search, RRF, rerank, blend)
       |-- cc-hook.ts        -> Claude Code Stop hook + relay commands
       |-- crystal-serve.ts  -> Crystal Core gateway (localhost:18790)
       |-- dream-weaver.ts   -> Dream Weaver integration (narrative consolidation)
@@ -163,28 +165,67 @@ Every local interface calls the same `core.ts`. The cloud MCP calls `cloud-cryst
 
 ## Search: How Does It Work?
 
-Hybrid search. Two engines run in parallel and their results are fused.
+Two-tier search system. Fast path (hybrid search) runs by default. Deep search adds LLM-powered query expansion and re-ranking for higher quality results. Falls back to fast path silently if no LLM provider is available.
 
-### The Pipeline
+### Fast Path (Hybrid Search)
 
 1. Query goes to both FTS5 (keyword match) and sqlite-vec (vector similarity)
 2. FTS5 returns BM25-ranked results, normalized to [0..1) via `|score| / (1 + |score|)`
 3. sqlite-vec returns cosine-distance results via two-step query (MATCH first, then JOIN separately ... sqlite-vec hangs with JOINs in the same query)
-4. Reciprocal Rank Fusion merges both lists: `weight / (k + rank + 1)` with k=60, plus top-rank bonus
-5. Recency weighting applied on top: `max(0.5, 1.0 - age_days * 0.01)`
+4. Reciprocal Rank Fusion merges both lists: `weight / (k + rank + 1)` with k=60, tiered weights (BM25 2x, vector 1x)
+5. Recency weighting applied on top: `max(0.3, exp(-age_days * 0.1))`
 6. Final results sorted by combined score
+
+### Deep Search (LLM-Powered, default)
+
+Deep search wraps the fast path with LLM intelligence. Implemented in `search-pipeline.ts`:
+
+1. **Strong signal detection:** BM25 probe first. If top score >= 0.85 with gap >= 0.15 to #2, skip expansion (answer already found).
+2. **Query expansion:** LLM generates 3 variations ... lexical (keyword-focused), vector (semantic rephrase), HyDE (hypothetical answer document). Each variation runs through the fast path.
+3. **RRF merge:** All results from original + expanded queries fused via Reciprocal Rank Fusion.
+4. **LLM re-ranking:** Top 40 RRF candidates scored by LLM for relevance to the original query.
+5. **Position-aware blending:** Top 3: 75% RRF + 25% reranker. Results 4-10: 60/40. Results 11+: 40/60. Trusts RRF for top positions, lets the reranker fix ordering in the tail.
+
+Deep search is the default. No flags needed. Falls back silently to fast path if no LLM provider is available.
+
+### LLM Provider Cascade
+
+The deep search pipeline tries providers in order. First available wins:
+
+| Priority | Provider | Cost | Speed |
+|----------|----------|------|-------|
+| 0 | **MCP Sampling** (if client supports it) | Included in Max subscription | Fast |
+| 1 | **MLX** (local, Apple Silicon) | Free | Fastest |
+| 2 | **Ollama** (local) | Free | Fast |
+| 3 | **OpenAI API** | ~$0.001/search | Network-dependent |
+| 4 | **Anthropic API** (direct key only, not OAuth) | ~$0.001/search | Network-dependent |
+| 5 | **None** | Free | N/A (fast path only) |
+
+Local-first by default. API keys are the fallback, not the primary path. MCP Sampling (priority 0) is designed and coded but waiting on Claude Code to implement it (Anthropic Issue #1785).
+
+Provider detection in `llm.ts`:
+- Check MCP sampling capability from connected client
+- Check `http://localhost:8080/v1/models` for MLX server
+- Check `http://localhost:11434/api/tags` for Ollama (filters out embedding-only models)
+- Check env var or 1Password for OpenAI key
+- Check env var for Anthropic key (skips OAuth tokens `sk-ant-oat01-`)
+- None found: log once, use fast path
+
+### Time-Filtered Search
+
+Search can be filtered by time: `--since 24h`, `--since 7d`, `--since 30d`, or an ISO date. Applied as a SQL WHERE clause before search. Available on CLI and MCP (`time_filter` parameter).
+
+### Recency Decay
+
+Exponential decay from 1.0 to floor 0.3. Day 0: 1.0, Day 1: 0.90, Day 3: 0.74, Day 7: 0.50, Day 14+: 0.3 (floor). Fresh context wins decisively. Old content still surfaces for strong matches but doesn't bury recent results.
+
+Freshness flags: fresh (<3 days), recent (<7 days), aging (<14 days), stale (14+ days).
 
 Inspired by and partially ported from [QMD](https://github.com/tobi/qmd) by Tobi Lutke (MIT, 2024-2026).
 
 ### Why Hybrid?
 
 Vector search alone misses exact matches. Keyword search alone misses semantic similarity. Hybrid catches both. A search for "deployment process" will find conversations that use the word "deployment" (BM25) and conversations about "shipping code to production" (vector similarity).
-
-### Recency Decay
-
-Linear decay from 1.0 to 0.5 over 50 days. Fresh context wins ties. Old stuff still surfaces for strong matches.
-
-Freshness flags: fresh (<3 days), recent (<7 days), aging (<14 days), stale (14+ days).
 
 ### Content Dedup
 
@@ -371,7 +412,7 @@ Incremental sync detects changed files via SHA-256 content hashing. Only re-embe
 
 ```bash
 # Search
-crystal search <query> [-n limit] [--agent <id>] [--provider <openai|ollama|google>]
+crystal search <query> [-n limit] [--agent <id>] [--since <24h|7d|30d>] [--provider <openai|ollama|google>]
 
 # Remember / forget
 crystal remember <text> [--category fact|preference|event|opinion|skill]
@@ -494,6 +535,8 @@ memory-crystal/
     dream-weaver.ts   Dream Weaver integration (imports from dream-weaver-protocol)
     crystal-serve.ts  Crystal Core gateway (localhost:18790)
     staging.ts        New agent staging pipeline
+    llm.ts            LLM provider cascade (MLX > Ollama > OpenAI > Anthropic), query expansion, re-ranking
+    search-pipeline.ts Deep search pipeline (expand, search, RRF, rerank, blend)
     worker.ts         Cloudflare Worker relay (encrypted dead drop, R2, 3 channels)
     worker-mcp.ts     Cloud MCP server (OAuth 2.1 + DCR, ChatGPT/Claude)
     cloud-crystal.ts  D1 + Vectorize backend (cloud search)
@@ -554,7 +597,8 @@ sqlite-vec runs inside a single SQLite file. Cloudflare Workers don't have persi
 - **Phase 5** ... Complete. Core/Node architecture, crystal doctor, crystal backup, crystal bridge.
 - **Phase 6** ... Complete. Init discovery, bulk copy, OpenClaw parser, backfill, CE migration.
 - **Phase 7** ... Complete. Dream Weaver integration (via dream-weaver-protocol), Crystal Core gateway, staging pipeline, commands channel.
-- **Next** ... Local embeddings (zero API key default), directory submissions, LanceDB retirement.
+- **Phase 8** ... Complete. Search quality: exponential recency decay, time-filtered search, LLM query expansion + re-ranking (deep search), provider cascade (MLX > Ollama > OpenAI > Anthropic), MCP sampling integration (designed, waiting on Claude Code).
+- **Next** ... MLX auto-install during `crystal init`, local embeddings (zero API key default), LanceDB retirement.
 
 ## More Info
 
