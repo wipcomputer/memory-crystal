@@ -605,9 +605,25 @@ export class Crystal {
   // ── Recency helpers ──
 
   private recencyWeight(ageDays: number): number {
-    // Linear decay with floor at 0.5. Old stuff never fully disappears
-    // but fresh context wins ties. ~50 days to hit the floor.
-    return Math.max(0.5, 1.0 - ageDays * 0.01);
+    // Exponential decay: fresh content gets strong boost, rapid falloff.
+    // Floor 0.3 so old stuff never fully disappears.
+    // Half-life ~7 days. Day 0: 1.0, Day 1: 0.90, Day 3: 0.74, Day 7: 0.50, Day 14: 0.25 (floor 0.3)
+    return Math.max(0.3, Math.exp(-ageDays * 0.1));
+  }
+
+  /** Parse relative time strings ("24h", "7d", "30d") or ISO dates into ISO date strings. */
+  private parseSince(since: string): string | undefined {
+    // Relative: "24h", "7d", "30d"
+    const match = since.match(/^(\d+)(h|d)$/);
+    if (match) {
+      const [, num, unit] = match;
+      const ms = unit === 'h' ? parseInt(num) * 3600000 : parseInt(num) * 86400000;
+      return new Date(Date.now() - ms).toISOString();
+    }
+    // ISO date or datetime
+    const parsed = new Date(since);
+    if (!isNaN(parsed.getTime())) return parsed.toISOString();
+    return undefined;
   }
 
   private freshnessLabel(ageDays: number): "fresh" | "recent" | "aging" | "stale" {
@@ -619,7 +635,7 @@ export class Crystal {
 
   // ── Search (Hybrid: BM25 + Vector + RRF fusion + Recency) ──
 
-  async search(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string }): Promise<SearchResult[]> {
+  async search(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string }): Promise<SearchResult[]> {
     const db = this.sqliteDb!;
 
     // Check if sqlite-vec has been populated (migration complete)
@@ -635,13 +651,16 @@ export class Crystal {
       return this.searchLanceFallback(query, limit, filter);
     }
 
-    const [embedding] = await this.embed([query]);
-    const fetchLimit = Math.max(limit * 3, 30);
+    // Parse since filter into ISO date string
+    const sinceDate = filter?.since ? this.parseSince(filter.since) : undefined;
 
-    // Run FTS and vector search, then fuse with RRF
-    const vecResults = this.searchVec(embedding, fetchLimit, filter);
-    const ftsResults = this.searchFTS(query, fetchLimit, filter);
-    const fused = this.reciprocalRankFusion([ftsResults, vecResults], [1.0, 1.0]);
+    const [embedding] = await this.embed([query]);
+    const fetchLimit = Math.max(limit * 5, 50);
+
+    // Run FTS and vector search, then fuse with RRF. BM25 gets 2x weight.
+    const vecResults = this.searchVec(embedding, fetchLimit, { ...filter, sinceDate });
+    const ftsResults = this.searchFTS(query, fetchLimit, { ...filter, sinceDate });
+    const fused = this.reciprocalRankFusion([ftsResults, vecResults], [2.0, 1.0]);
 
     // Apply recency weighting on top of fused scores
     const now = Date.now();
@@ -661,8 +680,15 @@ export class Crystal {
     return scored.sort((a, b) => b.score - a.score).slice(0, limit);
   }
 
+  /** Deep search: query expansion + LLM re-ranking + position-aware blending.
+   *  Falls back to standard search if no LLM provider is available. */
+  async deepSearch(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string }): Promise<SearchResult[]> {
+    const { deepSearch: deepSearchFn } = await import('./search-pipeline.js');
+    return deepSearchFn(this, query, { limit, filter });
+  }
+
   /** Vector search via sqlite-vec. Two-step pattern: MATCH first, then JOIN. */
-  private searchVec(embedding: number[], limit: number, filter?: { agent_id?: string; source_type?: string }): SearchResult[] {
+  private searchVec(embedding: number[], limit: number, filter?: { agent_id?: string; source_type?: string; sinceDate?: string }): SearchResult[] {
     const db = this.sqliteDb!;
 
     if (!this.vecDimensions) return [];
@@ -687,6 +713,7 @@ export class Crystal {
 
     if (filter?.agent_id) { sql += ' AND agent_id = ?'; params.push(filter.agent_id); }
     if (filter?.source_type) { sql += ' AND source_type = ?'; params.push(filter.source_type); }
+    if (filter?.sinceDate) { sql += ' AND created_at >= ?'; params.push(filter.sinceDate); }
 
     const rows = db.prepare(sql).all(...params) as Array<{
       id: number; text: string; role: string; source_type: string;
@@ -705,7 +732,7 @@ export class Crystal {
   }
 
   /** Full-text search via FTS5 with BM25 scoring. */
-  private searchFTS(query: string, limit: number, filter?: { agent_id?: string; source_type?: string }): SearchResult[] {
+  private searchFTS(query: string, limit: number, filter?: { agent_id?: string; source_type?: string; sinceDate?: string }): SearchResult[] {
     const db = this.sqliteDb!;
     const ftsQuery = this.buildFTS5Query(query);
     if (!ftsQuery) return [];
@@ -721,6 +748,7 @@ export class Crystal {
 
     if (filter?.agent_id) { sql += ' AND c.agent_id = ?'; params.push(filter.agent_id); }
     if (filter?.source_type) { sql += ' AND c.source_type = ?'; params.push(filter.source_type); }
+    if (filter?.sinceDate) { sql += ' AND c.created_at >= ?'; params.push(filter.sinceDate); }
 
     sql += ' ORDER BY bm25_score LIMIT ?';
     params.push(limit);
@@ -1274,28 +1302,33 @@ export class Crystal {
 // Key resolution order:
 //   1. Explicit overrides (programmatic)
 //   2. process.env (set by op-secrets plugin inside OpenClaw, or by user)
-//   3. .env file in data dir (~/.openclaw/memory-crystal/.env)
-//   4. 1Password via op CLI (if SA token exists at ~/.openclaw/secrets/op-sa-token)
+//   3. .env file in data dir (~/.ldm/memory/.env)
+//   4. 1Password via op CLI (if SA token exists)
 //
 // Two setup paths:
-//   • .env file:    cp .env.example ~/.openclaw/memory-crystal/.env && edit
+//   • .env file:    cp .env.example ~/.ldm/memory/.env && edit
 //   • 1Password:    keys auto-resolved from "Agent Secrets" vault
 
 export function resolveConfig(overrides?: Partial<CrystalConfig>): CrystalConfig {
-  const openclawHome = process.env.OPENCLAW_HOME || join(process.env.HOME || '', '.openclaw');
+  const HOME = process.env.HOME || '';
+  const ldmMemory = join(HOME, '.ldm', 'memory');
 
   // dataDir resolution order:
   // 1. Explicit override (always wins)
   // 2. CRYSTAL_DATA_DIR env var (for testing)
-  // 3. ~/.ldm/memory/ if crystal.db exists there (post-migration)
-  // 4. Legacy ~/.openclaw/memory-crystal/ (pre-migration fallback)
+  // 3. ~/.ldm/memory/ (canonical LDM path)
+  // 4. Legacy ~/.openclaw/memory-crystal/ (pre-LDM migration fallback)
   let dataDir = overrides?.dataDir || process.env.CRYSTAL_DATA_DIR;
   if (!dataDir) {
-    const ldmMemory = join(process.env.HOME || '', '.ldm', 'memory');
     if (existsSync(join(ldmMemory, 'crystal.db'))) {
       dataDir = ldmMemory;
     } else {
-      dataDir = join(openclawHome, 'memory-crystal');
+      const legacyDir = join(HOME, '.openclaw', 'memory-crystal');
+      if (existsSync(join(legacyDir, 'crystal.db'))) {
+        dataDir = legacyDir;
+      } else {
+        dataDir = ldmMemory; // default: new LDM install
+      }
     }
   }
 
@@ -1303,9 +1336,9 @@ export function resolveConfig(overrides?: Partial<CrystalConfig>): CrystalConfig
   loadEnvFile(join(dataDir, '.env'));
 
   // Resolve API keys: env/.env first, then 1Password fallback
-  const openaiApiKey = overrides?.openaiApiKey || process.env.OPENAI_API_KEY || opRead(openclawHome, 'OpenAI API', 'api key');
-  const googleApiKey = overrides?.googleApiKey || process.env.GOOGLE_API_KEY || opRead(openclawHome, 'Google AI', 'api key');
-  const remoteToken = overrides?.remoteToken || process.env.CRYSTAL_REMOTE_TOKEN || opRead(openclawHome, 'Memory Crystal Remote', 'token');
+  const openaiApiKey = overrides?.openaiApiKey || process.env.OPENAI_API_KEY || opRead('OpenAI API', 'api key');
+  const googleApiKey = overrides?.googleApiKey || process.env.GOOGLE_API_KEY || opRead('Google AI', 'api key');
+  const remoteToken = overrides?.remoteToken || process.env.CRYSTAL_REMOTE_TOKEN || opRead('Memory Crystal Remote', 'token');
 
   return {
     dataDir,
@@ -1342,10 +1375,16 @@ function loadEnvFile(path: string): void {
   }
 }
 
-/** Read a secret from 1Password via op CLI. Falls back silently on failure. */
-function opRead(openclawHome: string, item: string, field: string): string | undefined {
+/** Read a secret from 1Password via op CLI. Falls back silently on failure.
+ *  Checks ~/.ldm/secrets/op-sa-token first, then ~/.openclaw/secrets/op-sa-token. */
+function opRead(item: string, field: string): string | undefined {
   try {
-    const saTokenPath = join(openclawHome, 'secrets', 'op-sa-token');
+    const HOME = process.env.HOME || '';
+    // Check LDM path first, then legacy OpenClaw path
+    let saTokenPath = join(HOME, '.ldm', 'secrets', 'op-sa-token');
+    if (!existsSync(saTokenPath)) {
+      saTokenPath = join(HOME, '.openclaw', 'secrets', 'op-sa-token');
+    }
     if (!existsSync(saTokenPath)) return undefined;
     const saToken = readFileSync(saTokenPath, 'utf8').trim();
     return execSync(`op read "op://Agent Secrets/${item}/${field}" 2>/dev/null`, {

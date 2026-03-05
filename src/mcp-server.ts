@@ -6,11 +6,12 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Crystal, RemoteCrystal, resolveConfig, createCrystal } from './core.js';
+import { resolveStatePath, stateWritePath } from './ldm.js';
+import { setSamplingServer } from './llm.js';
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-const CONFIG_DIR = join(process.env.HOME || '', '.openclaw');
-const PRIVATE_MODE_PATH = join(CONFIG_DIR, 'memory', 'memory-capture-state.json');
+const PRIVATE_MODE_PATH = resolveStatePath('memory-capture-state.json');
 
 function isPrivateMode(): boolean {
   try {
@@ -22,11 +23,10 @@ function isPrivateMode(): boolean {
   return false;
 }
 
-const METRICS_PATH = join(CONFIG_DIR, 'memory', 'search-metrics.jsonl');
+const METRICS_PATH = stateWritePath('search-metrics.jsonl');
 
 function logSearchMetric(tool: string, query: string, resultCount: number) {
   try {
-    mkdirSync(join(CONFIG_DIR, 'memory'), { recursive: true });
     const entry = JSON.stringify({
       ts: new Date().toISOString(),
       tool,
@@ -62,6 +62,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           query: { type: 'string', description: 'What to search for' },
           limit: { type: 'number', description: 'Max results (default: 5)' },
           agent_id: { type: 'string', description: 'Filter by agent (e.g. "main", "claude-code")' },
+          time_filter: { type: 'string', description: 'Only return results newer than this. Relative ("24h", "7d", "30d") or ISO date.' },
+          quality: { type: 'string', enum: ['fast', 'deep'], description: 'Search quality mode. "fast" (default) uses hybrid search. "deep" adds LLM query expansion + re-ranking.' },
         },
         required: ['query'],
       },
@@ -150,8 +152,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const limit = (args?.limit as number) || 5;
         const filter: any = {};
         if (args?.agent_id) filter.agent_id = args.agent_id;
-
-        const results = await crystal.search(query, limit, filter);
+        if (args?.time_filter) filter.since = args.time_filter;
+        const results = isRemote
+          ? await crystal.search(query, limit, filter)
+          : await (crystal as Crystal).deepSearch(query, limit, filter);
         logSearchMetric('crystal_search', query, results.length);
 
         if (results.length === 0) {
@@ -266,6 +270,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Check if the connected client supports MCP sampling.
+  // If so, wire it up as the preferred LLM provider (uses Max subscription, no API key).
+  // NOTE: This is a no-op until Claude Code implements sampling (Issue #1785).
+  try {
+    const clientCapabilities = (server as any).getClientCapabilities?.();
+    if (clientCapabilities?.sampling) {
+      setSamplingServer(server);
+      process.stderr.write('[memory-crystal] MCP sampling available: using client LLM for deep search\n');
+    }
+  } catch {
+    // Client doesn't support sampling yet. Fall through to MLX/API providers.
+  }
 }
 
 main().catch(err => {

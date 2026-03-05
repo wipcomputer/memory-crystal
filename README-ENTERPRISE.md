@@ -2,7 +2,7 @@
 
 # Memory Crystal for Enterprise
 
-Agent memory infrastructure. Local-first. Encrypted. Inspectable.
+Agent memory infrastructure. Local-first. Encrypted. Inspectable. *In testing.*
 
 ## The Problem
 
@@ -23,20 +23,40 @@ Memory Crystal is a persistent context layer for AI agents. One shared database.
 - **Agent isolation.** Each agent gets its own ID, its own transcript archive, its own session summaries. Shared search across agents, isolated storage per agent.
 - **Zero cloud dependency.** Runs fully offline with local embeddings (Ollama). No API keys required. No data exfiltration risk.
 
+## Five-Layer Memory Stack
+
+Memory Crystal implements a full memory pipeline, not just search.
+
+| Layer | What | How |
+|-------|------|-----|
+| L1: Raw Transcripts | Every conversation archived as JSONL | Automatic. cc-poller (cron), cc-hook (Stop), openclaw.ts (agent_end) |
+| L2: Vector Index | Chunks embedded into crystal.db | Automatic. Hybrid search (BM25 + vector + RRF) |
+| L3: Structured Memory | Facts, preferences, decisions | `crystal_remember` / `crystal_forget` |
+| L4: Narrative Consolidation | Dream Weaver journals, identity, soul | `crystal dream-weave` (imports engine from Dream Weaver Protocol) |
+| L5: Active Working Context | Boot sequence files, shared context | Agent reads on startup |
+
+L1-L3 are fully automated. L4 runs on-demand or via Crystal Core gateway. L5 is consumed by the agent's boot sequence.
+
 ## Architecture
 
 ```
 sqlite-vec (vectors) + FTS5 (BM25) + SQLite (metadata)
          |                 |                    |
     core.ts ... pure logic, zero framework deps
-    |-- cli.ts          -> crystal search "query"
-    |-- mcp-server.ts   -> MCP protocol (any compatible client)
-    |-- openclaw.ts     -> OpenClaw plugin
-    |-- cc-hook.ts      -> Claude Code hook (auto-capture)
-    +-- worker.ts       -> Encrypted relay (multi-site sync)
+    |-- cli.ts            -> crystal search, dream-weave, backfill, serve
+    |-- mcp-server.ts     -> MCP protocol (any compatible client)
+    |-- openclaw.ts       -> OpenClaw plugin + raw data sync to LDM
+    |-- cc-poller.ts      -> Continuous capture (cron, primary)
+    |-- cc-hook.ts        -> Claude Code Stop hook (redundancy) + relay commands
+    |-- crystal-serve.ts  -> Crystal Core gateway (localhost:18790)
+    |-- dream-weaver.ts   -> Dream Weaver integration (narrative consolidation)
+    |-- staging.ts        -> New agent staging pipeline
+    |-- llm.ts            -> LLM provider cascade (MLX > Ollama > OpenAI > Anthropic)
+    |-- search-pipeline.ts -> Deep search (expand, search, RRF, rerank, blend)
+    +-- worker.ts         -> Encrypted relay (multi-site sync, 3 channels)
 ```
 
-One core module. Five interfaces. Every interface calls the same search engine. No inconsistency between access paths.
+One core module. Multiple interfaces. Every interface calls the same search engine. No inconsistency between access paths.
 
 ## Security Model
 
@@ -52,15 +72,25 @@ One core module. Five interfaces. Every interface calls the same search engine. 
 
 ## Retrieval Quality
 
-Hybrid search is not "we added vectors." It's a retrieval engine.
+Hybrid search is not "we added vectors." It's a two-tier retrieval engine with LLM-powered deep search.
 
+### Fast Path (Hybrid Search)
 - **FTS5 BM25** for exact keyword matches (Porter stemming)
 - **sqlite-vec cosine similarity** for semantic matches
-- **Reciprocal Rank Fusion** merges both result lists (k=60, rank-weighted)
-- **Recency weighting** ensures fresh context wins ties: `max(0.5, 1.0 - age_days * 0.01)`
+- **Reciprocal Rank Fusion** merges both result lists (k=60, tiered weights: BM25 2x, vector 1x)
+- **Recency weighting** ensures fresh context wins decisively: exponential decay `max(0.3, exp(-age_days * 0.1))`
 - **Content deduplication** via SHA-256 hash prevents duplicate embeddings
+- **Time-filtered search** ... restrict results to last 24h, 7d, 30d, or any date range
 
-A search for "deployment policy" finds conversations containing those exact words (BM25) and conversations about "shipping code to production" (vector similarity). Both matter. Both surface.
+### Deep Search (LLM-Powered, default)
+- **Query expansion** ... LLM generates 3 search variations (lexical, semantic, hypothetical document). Each runs through hybrid search. Results merged via RRF.
+- **Strong signal detection** ... BM25 probe skips expansion when the answer is obvious (saves latency).
+- **LLM re-ranking** ... top 40 candidates scored by LLM for relevance to the original query.
+- **Position-aware blending** ... trusts RRF for top positions, lets the reranker fix ordering in the tail.
+
+Deep search runs by default. Falls back to fast path silently if no LLM provider is available. For air-gapped environments, MLX (Apple Silicon) or Ollama provides free, fully local deep search with no API keys and no network.
+
+A search for "deployment policy" finds conversations containing those exact words (BM25), conversations about "shipping code to production" (vector similarity), and conversations about "release workflow" that the LLM recognizes as relevant. All three matter. All three surface.
 
 ## What Gets Stored
 
@@ -76,6 +106,8 @@ Additionally:
 - **Explicit memories** stored via `crystal_remember` (facts, preferences, decisions)
 - **Source files** indexed as collections (code, documentation, internal knowledge bases)
 - **Daily logs** appended per-agent for audit trails
+- **Dream Weaver journals** generated by narrative consolidation (identity, soul, context, reference)
+- **Workspace files** synced from agent workspace to LDM (OpenClaw .md files)
 
 ## Embedding Providers
 
@@ -129,12 +161,33 @@ No migrations server. No schema versioning service. It's SQLite. `sqlite3 crysta
 
 | Platform | Integration | Auto-Capture |
 |----------|------------|-------------|
-| Claude Code | Stop hook (`cc-hook.ts`) | Yes. Every response. |
-| OpenClaw | Plugin (`openclaw.ts`) + `agent_end` hook | Yes. Every turn. |
+| Claude Code | Cron poller (`cc-poller.ts`, primary) + Stop hook (`cc-hook.ts`, redundancy) | Yes. Every minute via cron, plus flush on session end. |
+| OpenClaw | Plugin (`openclaw.ts`) + `agent_end` hook + raw data sync | Yes. Every turn. Also syncs sessions, workspace, daily logs to LDM. |
 | Claude Desktop | MCP server (`mcp-server.ts`) | Search only. Manual capture. |
 | Any MCP client | MCP server | Search only. Manual capture. |
 | Any shell-accessible tool | CLI (`crystal search`) | Manual. |
 | Custom agents | Node.js module (`import from 'memory-crystal'`) | Programmable. |
+
+## Crystal Core Gateway
+
+Crystal Core runs an HTTP gateway (`crystal serve`) on localhost:18790. OpenAI-compatible endpoint for agent-to-agent communication and automated processing.
+
+- `POST /v1/chat/completions` ... invoke `claude -p` through the gateway
+- `POST /process` ... trigger backfill, dream-weave, or staging processing
+- `GET /status` ... health check and crystal stats
+
+Localhost-only binding. Never exposed to the network. Optional bearer token auth.
+
+## New Agent Onboarding
+
+When a new agent connects via relay, Crystal Core automatically:
+1. Detects the unknown agent ID
+2. Routes to staging (`~/.ldm/staging/{agent_id}/`)
+3. Runs backfill (embed all transcripts)
+4. Runs Dream Weaver full mode (generate identity, soul, context, journals)
+5. Moves to live capture
+
+No manual intervention. The staging pipeline handles the cold-start problem.
 
 ## Deployment
 
@@ -144,7 +197,7 @@ crystal init --agent your-agent-id
 crystal status
 ```
 
-For enterprise deployments across multiple machines, see [Multi-Device Sync](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md).
+For enterprise deployments across multiple machines, see [Relay: Multi-Device Sync](https://github.com/wipcomputer/memory-crystal/blob/main/RELAY.md).
 
 For full technical details, see [Technical Documentation](https://github.com/wipcomputer/memory-crystal/blob/main/TECHNICAL.md).
 
