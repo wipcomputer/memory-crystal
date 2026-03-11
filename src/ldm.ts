@@ -2,7 +2,7 @@
 // Central module for all LDM directory knowledge. Every other file imports paths from here.
 // LDM = Learning Dreaming Machines. ~/.ldm/ is the universal agent home.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, chmodSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -10,10 +10,49 @@ import { fileURLToPath } from 'node:url';
 const HOME = process.env.HOME || '';
 const LDM_ROOT = join(HOME, '.ldm');
 
+// ── Agent config ──
+
+export interface AgentConfig {
+  agentId: string;
+  agent?: string;
+  harness?: string;
+  model?: string;
+  created?: string;
+  memoryPaths?: Record<string, string>;
+  dreamWeaver?: Record<string, unknown>;
+}
+
+export function loadAgentConfig(id: string): AgentConfig | null {
+  const cfgPath = join(LDM_ROOT, 'agents', id, 'config.json');
+  try {
+    if (existsSync(cfgPath)) return JSON.parse(readFileSync(cfgPath, 'utf-8'));
+  } catch {}
+  return null;
+}
+
+export function saveAgentConfig(id: string, config: AgentConfig): void {
+  const dir = join(LDM_ROOT, 'agents', id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.json'), JSON.stringify(config, null, 2) + '\n');
+}
+
 // ── Agent ID resolution ──
 
-export function getAgentId(): string {
-  return process.env.CRYSTAL_AGENT_ID || 'cc-mini';
+export function getAgentId(harnessHint?: 'claude-code' | 'openclaw'): string {
+  if (process.env.CRYSTAL_AGENT_ID) return process.env.CRYSTAL_AGENT_ID;
+  const agentsDir = join(LDM_ROOT, 'agents');
+  if (existsSync(agentsDir)) {
+    try {
+      for (const d of readdirSync(agentsDir)) {
+        const cfg = loadAgentConfig(d);
+        if (!cfg || !cfg.agentId) continue;
+        if (!harnessHint) return cfg.agentId;
+        if (harnessHint === 'claude-code' && cfg.harness === 'claude-code-cli') return cfg.agentId;
+        if (harnessHint === 'openclaw' && cfg.harness === 'openclaw') return cfg.agentId;
+      }
+    } catch {}
+  }
+  return harnessHint === 'openclaw' ? 'oc-lesa-mini' : 'cc-mini';
 }
 
 // ── Path resolution ──

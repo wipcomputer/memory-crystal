@@ -1,6 +1,6 @@
 {
   "name": "memory-crystal",
-  "version": "0.7.2",
+  "version": "0.7.4",
   "description": "Sovereign memory system — local-first with ephemeral encrypted relay. Your memory, your machine, your rules.",
   "type": "module",
   "main": "dist/core.js",
@@ -25,7 +25,11 @@
     "dev": "tsup src/core.ts src/cli.ts src/mcp-server.ts src/openclaw.ts src/migrate.ts src/cc-hook.ts src/crypto.ts --format esm --watch --outDir dist",
     "check": "node dist/cli.js status",
     "search": "node dist/cli.js search",
-    "migrate": "node dist/migrate.js"
+    "migrate": "node dist/migrate.js",
+    "cloud:dev": "cd cloud && npx wrangler dev",
+    "cloud:deploy": "cd cloud && npx wrangler deploy",
+    "cloud:db:migrate": "cd cloud && npx wrangler d1 migrations apply memory-crystal-cloud --local",
+    "cloud:db:migrate:remote": "cd cloud && npx wrangler d1 migrations apply memory-crystal-cloud --remote"
   },
   "dependencies": {
     "dream-weaver-protocol": "file:../dream-weaver-protocol-private",
@@ -47,6 +51,7 @@
     "@types/node": "^22.0.0",
     "@types/qrcode-terminal": "^0.12.2",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "wrangler": "^3.95.0"
   }
 }

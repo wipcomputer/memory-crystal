@@ -130,7 +130,7 @@ export default {
       const messages = event.messages;
       if (!messages || messages.length === 0) return;
 
-      const agentId = ctx.agentId || 'main';
+      const agentId = ctx.agentId || OC_AGENT_ID;
       const sessionKey = ctx.sessionKey || 'unknown';
 
       // Check capture state

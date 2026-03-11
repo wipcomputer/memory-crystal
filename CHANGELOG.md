@@ -3,7 +3,13 @@
 
 
 
+## 0.7.4 (2026-03-11)
 
+MCP fix (OPENCLAW_HOME env var), AgentId reads from LDM config instead of hardcoding, MCP registrations moved to user-level, 33 stale branches renamed, QMD v1.1.6 analysis documented
+
+## 0.7.3 (2026-03-10)
+
+Fix MCP registration to include OPENCLAW_HOME env var for memory-crystal MCP server
 
 ## 0.7.2 (2026-03-05)
 
@@ -71,4 +77,3 @@ Phase 1 continuous capture, Cloud MCP server, QR pairing, crystal init, docs ove
 ## 0.2.0 (2026-02-28)
 
 README overhaul, relay encryption, QR pairing spec, Grok/Lesa feedback, disable auto dev-updates
-

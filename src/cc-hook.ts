@@ -21,14 +21,14 @@
 
 import { Crystal, RemoteCrystal, resolveConfig, createCrystal, type Chunk } from './core.js';
 import { loadRelayKey, encryptJSON } from './crypto.js';
-import { ensureLdm, ldmPaths, resolveStatePath, stateWritePath } from './ldm.js';
+import { ensureLdm, ldmPaths, resolveStatePath, stateWritePath, getAgentId } from './ldm.js';
 import {
   readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync,
   statSync, openSync, readSync, closeSync, copyFileSync,
 } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 
-const CC_AGENT_ID = process.env.CRYSTAL_AGENT_ID || 'cc-mini';
+const CC_AGENT_ID = getAgentId('claude-code');
 const RELAY_URL = process.env.CRYSTAL_RELAY_URL || '';
 const RELAY_TOKEN = process.env.CRYSTAL_RELAY_TOKEN || '';
 const PRIVATE_MODE_PATH = resolveStatePath('memory-capture-state.json');
@@ -464,8 +464,7 @@ async function main(): Promise<void> {
       const summaryMsgs = messages.map(m => ({ role: m.role, text: m.text, timestamp: m.timestamp, sessionId: m.sessionId }));
       const summary = await generateSessionSummary(summaryMsgs);
       const sessionId = messages[0]?.sessionId || 'unknown';
-      const agentId = process.env.CRYSTAL_AGENT_ID || 'cc-mini';
-      writeSummaryFile(paths.sessions, summary, agentId, sessionId);
+      writeSummaryFile(paths.sessions, summary, CC_AGENT_ID, sessionId);
     } catch {} // Summary failure is non-fatal
 
     // Dev updates disabled (2026-02-28). Was auto-generating files in every repo's
