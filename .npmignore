@@ -12,6 +12,18 @@ ai/
 tsconfig.json
 tsconfig.*.json
 
+# Data files
+*.lance/
+*.db
+state.json
+sync-state.json
+logs/
+.DS_Store
+_git-ignore/
+
+# Cloud-specific
+wrangler.toml
+
 # Old/backup files
 README-old.md
 LETTERS.md

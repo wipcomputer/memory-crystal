@@ -14,8 +14,8 @@ export function loadRelayKey(): Buffer {
   if (!existsSync(KEY_PATH)) {
     throw new Error(
       `Relay key not found at ${KEY_PATH}\n` +
-      `Generate one: openssl rand -base64 32 > ${KEY_PATH} && chmod 600 ${KEY_PATH}\n` +
-      `Copy the same key to all trusted machines.`
+      `Generate one: mkdir -p ~/.ldm/secrets && openssl rand -base64 32 > ~/.ldm/secrets/crystal-relay-key && chmod 600 ~/.ldm/secrets/crystal-relay-key\n` +
+      `Or run: crystal pair`
     );
   }
   const raw = readFileSync(KEY_PATH, 'utf-8').trim();

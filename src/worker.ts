@@ -1,14 +1,16 @@
-// memory-crystal/worker.ts — Cloudflare Worker (Ephemeral Relay).
+// memory-crystal/worker.ts ... Cloudflare Worker (Ephemeral Relay).
 // Dead drop for encrypted blobs. No search, no database, no intelligence.
 // Data passes through encrypted, gets picked up, gets deleted.
 // The Worker cannot read what it holds.
 //
 // Channels:
-//   conversations — devices drop encrypted conversation chunks for Core to pick up
-//   mirror        — Core drops encrypted delta chunks for Nodes to pick up
-//   files         — Core drops encrypted file tree deltas for Nodes to pick up
-//   commands      — Node sends commands to Core ("process my data", "run Dream Weaver")
-//                   Core sends results back ("processing complete", "mirror ready")
+//   conversations         ... devices drop encrypted conversation chunks for Core to pick up
+//   mirror                ... Core drops encrypted delta chunks for Nodes to pick up
+//   files                 ... Core drops encrypted file tree deltas for Nodes to pick up
+//   commands              ... Node sends commands to Core ("process my data", "run Dream Weaver")
+//                             Core sends results back ("processing complete", "mirror ready")
+//   chatgpt               ... cloud MCP server drops (conversations, memories, commands)
+//   chatgpt-attachments   ... cloud MCP server drops binary files (images, audio, video)
 //
 // Endpoints:
 //   POST   /drop/:channel       — deposit encrypted blob
@@ -52,7 +54,7 @@ function authenticate(request: Request, env: Env): AuthResult | Response {
 
 // ── Channel validation ──
 
-const VALID_CHANNELS = ['conversations', 'mirror', 'commands', 'files'];
+const VALID_CHANNELS = ['conversations', 'mirror', 'commands', 'files', 'chatgpt', 'chatgpt-attachments'];
 
 function isValidChannel(channel: string): boolean {
   return VALID_CHANNELS.includes(channel);

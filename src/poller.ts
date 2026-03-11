@@ -1,6 +1,9 @@
 #!/usr/bin/env node
-// memory-crystal/poller.ts — Mini-side relay poller.
-// Polls the ephemeral relay Worker for new conversation drops from remote devices.
+// memory-crystal/poller.ts ... Mini-side relay poller.
+// Polls the ephemeral relay Worker for new drops from remote devices.
+// Handles two channels:
+//   conversations ... original CC/Lesa relay drops (bulk messages)
+//   chatgpt       ... cloud MCP drops (individual: conversation, remember, forget, attachment)
 // Verifies HMAC, decrypts, ingests into master crystal.
 // Also pushes encrypted mirror snapshots for remote devices.
 //
@@ -20,6 +23,7 @@ import { isNewAgent, ensureStaging, markReady } from './staging.js';
 import { pushFileSync } from './file-sync.js';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { createDecipheriv } from 'node:crypto';
 
 const RELAY_URL = process.env.CRYSTAL_RELAY_URL || '';
 const RELAY_TOKEN = process.env.CRYSTAL_RELAY_TOKEN || '';
@@ -28,6 +32,8 @@ const POLLER_STATE_PATH = resolveStatePath('relay-poller-state.json');
 interface PollerState {
   lastPoll: string | null;
   totalIngested: number;
+  totalChatgptIngested: number;
+  totalAttachments: number;
   lastMirrorPush: string | null;
   /** Watermark: highest chunk ID pushed to mirror channel (delta sync) */
   lastDeltaChunkId: number;
@@ -36,10 +42,18 @@ interface PollerState {
 function loadState(): PollerState {
   try {
     if (existsSync(POLLER_STATE_PATH)) {
-      return JSON.parse(readFileSync(POLLER_STATE_PATH, 'utf-8'));
+      const raw = JSON.parse(readFileSync(POLLER_STATE_PATH, 'utf-8'));
+      return {
+        lastPoll: raw.lastPoll ?? null,
+        totalIngested: raw.totalIngested ?? 0,
+        totalChatgptIngested: raw.totalChatgptIngested ?? 0,
+        totalAttachments: raw.totalAttachments ?? 0,
+        lastMirrorPush: raw.lastMirrorPush ?? null,
+        lastDeltaChunkId: raw.lastDeltaChunkId ?? 0,
+      };
     }
   } catch {}
-  return { lastPoll: null, totalIngested: 0, lastMirrorPush: null, lastDeltaChunkId: 0 };
+  return { lastPoll: null, totalIngested: 0, totalChatgptIngested: 0, totalAttachments: 0, lastMirrorPush: null, lastDeltaChunkId: 0 };
 }
 
 function saveState(state: PollerState): void {
@@ -47,9 +61,9 @@ function saveState(state: PollerState): void {
   writeFileSync(writePath, JSON.stringify(state, null, 2));
 }
 
-// ── Relay message types ──
+// ── Relay message types (original conversations channel) ──
 
-interface RelayDrop {
+interface LegacyRelayDrop {
   agent_id: string;
   dropped_at: string;
   messages: Array<{
@@ -60,6 +74,52 @@ interface RelayDrop {
   }>;
 }
 
+// ── Cloud MCP drop types (chatgpt channel) ──
+
+interface CloudDrop {
+  type: 'remember' | 'forget' | 'conversation' | 'attachment';
+  agent_id: string;
+  user_id: string;
+  timestamp: string;
+  data: CloudRememberData | CloudForgetData | CloudConversationData | CloudAttachmentData;
+}
+
+interface CloudRememberData {
+  text: string;
+  category: string;
+  source: string;
+  surface: string;
+}
+
+interface CloudForgetData {
+  memory_id: number;
+  reason?: string;
+}
+
+interface CloudConversationData {
+  role: string;
+  content: string;
+  source: string;
+  surface: string;
+  session_id?: string;
+  turn_index?: number;
+  model?: string;
+  raw_json?: string;
+  tool_calls?: Array<{ tool_name: string; arguments: string; result?: string }>;
+  attachments?: Array<{ type: string; url?: string; filename?: string; mime_type?: string; data_base64?: string }>;
+}
+
+interface CloudAttachmentData {
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  r2_key: string;
+  source: string;
+  surface: string;
+  context?: string;
+  session_id?: string;
+}
+
 interface BlobInfo {
   id: string;
   size: number;
@@ -67,18 +127,12 @@ interface BlobInfo {
   agent_id: string;
 }
 
-// ── Poll and ingest ──
+// ── Poll and ingest (original conversations channel) ──
 
-async function pollOnce(): Promise<{ ingested: number; errors: number }> {
-  if (!RELAY_URL || !RELAY_TOKEN) {
-    throw new Error('CRYSTAL_RELAY_URL and CRYSTAL_RELAY_TOKEN must be set');
-  }
-
-  const relayKey = loadRelayKey();
+async function pollConversations(crystal: Crystal, relayKey: Buffer): Promise<{ ingested: number; errors: number }> {
   let ingested = 0;
   let errors = 0;
 
-  // List available conversation blobs
   const listResp = await fetch(`${RELAY_URL}/pickup/conversations`, {
     headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
   });
@@ -89,21 +143,12 @@ async function pollOnce(): Promise<{ ingested: number; errors: number }> {
 
   const listData = await listResp.json() as { count: number; blobs: BlobInfo[] };
 
-  if (listData.count === 0) {
-    return { ingested: 0, errors: 0 };
-  }
+  if (listData.count === 0) return { ingested: 0, errors: 0 };
 
-  process.stderr.write(`[relay-poller] ${listData.count} blob(s) waiting\n`);
+  process.stderr.write(`[relay-poller] conversations: ${listData.count} blob(s) waiting\n`);
 
-  // Initialize crystal for ingestion
-  const config = resolveConfig();
-  const crystal = new Crystal(config);
-  await crystal.init();
-
-  // Process each blob
   for (const blob of listData.blobs) {
     try {
-      // Fetch the encrypted blob
       const blobResp = await fetch(`${RELAY_URL}/pickup/conversations/${blob.id}`, {
         headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
       });
@@ -117,13 +162,11 @@ async function pollOnce(): Promise<{ ingested: number; errors: number }> {
       const encryptedText = await blobResp.text();
       const encrypted = JSON.parse(encryptedText) as EncryptedPayload;
 
-      // Verify HMAC + decrypt
-      let drop: RelayDrop;
+      let drop: LegacyRelayDrop;
       try {
-        drop = decryptJSON<RelayDrop>(encrypted, relayKey);
+        drop = decryptJSON<LegacyRelayDrop>(encrypted, relayKey);
       } catch (err: any) {
-        process.stderr.write(`[relay-poller] blob ${blob.id} failed verification: ${err.message} — DISCARDED\n`);
-        // Delete the bad blob so it doesn't block future polls
+        process.stderr.write(`[relay-poller] blob ${blob.id} failed verification: ${err.message} ... DISCARDED\n`);
         await fetch(`${RELAY_URL}/confirm/conversations/${blob.id}`, {
           method: 'DELETE',
           headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
@@ -182,11 +225,9 @@ async function pollOnce(): Promise<{ ingested: number; errors: number }> {
         }
       }
 
-      // Ingest into master crystal
       const count = await crystal.ingest(chunks);
       ingested += count;
 
-      // Confirm receipt — Worker deletes the blob
       await fetch(`${RELAY_URL}/confirm/conversations/${blob.id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
@@ -198,12 +239,10 @@ async function pollOnce(): Promise<{ ingested: number; errors: number }> {
       try {
         const remotePaths = ensureLdm(drop.agent_id);
 
-        // 1. Write JSONL transcript
         const jsonlPath = join(remotePaths.transcripts, `relay-${blob.id}.jsonl`);
         const jsonlLines = drop.messages.map(m => JSON.stringify(m)).join('\n') + '\n';
         writeFileSync(jsonlPath, jsonlLines);
 
-        // 2. Generate MD session summary
         const summaryMsgs: SummaryMessage[] = drop.messages.map(m => ({
           role: m.role,
           text: m.text,
@@ -214,22 +253,10 @@ async function pollOnce(): Promise<{ ingested: number; errors: number }> {
         const sessionId = drop.messages[0]?.sessionId || 'unknown';
         writeSummaryFile(remotePaths.sessions, summary, drop.agent_id, sessionId);
 
-        // 3. Append daily breadcrumb
-        const now = new Date();
-        const dateStr = now.toISOString().slice(0, 10);
-        const dailyPath = join(remotePaths.daily, `${dateStr}.md`);
-        if (!existsSync(dailyPath)) {
-          writeFileSync(dailyPath, `# ${dateStr} - ${drop.agent_id} Daily Log (via relay)\n\n`);
-        }
-        const firstUser = drop.messages.find(m => m.role === 'user');
-        if (firstUser) {
-          const snippet = firstUser.text.slice(0, 120).replace(/\n/g, ' ').trim();
-          appendFileSync(dailyPath, `- **${now.toISOString().slice(11, 16)}** [relay] ${snippet}\n`);
-        }
+        appendDailyBreadcrumb(drop.agent_id, drop.messages.find(m => m.role === 'user')?.text || '');
       } catch (fileErr: any) {
         process.stderr.write(`[relay-poller] file tree write failed (non-fatal): ${fileErr.message}\n`);
       }
-
     } catch (err: any) {
       process.stderr.write(`[relay-poller] error processing blob ${blob.id}: ${err.message}\n`);
       errors++;
@@ -244,6 +271,311 @@ async function pollOnce(): Promise<{ ingested: number; errors: number }> {
   }
 
   return { ingested, errors };
+}
+
+// ── Poll ChatGPT channel (cloud MCP drops) ──
+
+async function pollChatgpt(crystal: Crystal, relayKey: Buffer): Promise<{ ingested: number; attachments: number; errors: number }> {
+  let ingested = 0;
+  let attachments = 0;
+  let errors = 0;
+
+  // Poll metadata drops
+  const listResp = await fetch(`${RELAY_URL}/pickup/chatgpt`, {
+    headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+  });
+
+  if (!listResp.ok) {
+    process.stderr.write(`[relay-poller] chatgpt list failed: ${listResp.status}\n`);
+    return { ingested: 0, attachments: 0, errors: 1 };
+  }
+
+  const listData = await listResp.json() as { count: number; blobs: BlobInfo[] };
+
+  if (listData.count > 0) {
+    process.stderr.write(`[relay-poller] chatgpt: ${listData.count} drop(s) waiting\n`);
+  }
+
+  for (const blob of listData.blobs) {
+    try {
+      const blobResp = await fetch(`${RELAY_URL}/pickup/chatgpt/${blob.id}`, {
+        headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+      });
+
+      if (!blobResp.ok) {
+        process.stderr.write(`[relay-poller] chatgpt: failed to fetch ${blob.id}: ${blobResp.status}\n`);
+        errors++;
+        continue;
+      }
+
+      const encryptedText = await blobResp.text();
+      const encrypted = JSON.parse(encryptedText) as EncryptedPayload;
+
+      let drop: CloudDrop;
+      try {
+        drop = decryptJSON<CloudDrop>(encrypted, relayKey);
+      } catch (err: any) {
+        process.stderr.write(`[relay-poller] chatgpt: ${blob.id} failed verification: ${err.message} ... DISCARDED\n`);
+        await confirmBlob('chatgpt', blob.id);
+        errors++;
+        continue;
+      }
+
+      // Route by drop type
+      switch (drop.type) {
+        case 'conversation': {
+          const data = drop.data as CloudConversationData;
+          const result = await ingestConversationDrop(crystal, drop, data);
+          ingested += result;
+          break;
+        }
+        case 'remember': {
+          const data = drop.data as CloudRememberData;
+          await crystal.remember(data.text, data.category as any);
+          ingested++;
+          process.stderr.write(`[relay-poller] chatgpt: remembered "${data.text.slice(0, 60)}..." (${data.category}) from ${drop.agent_id}\n`);
+          break;
+        }
+        case 'forget': {
+          const data = drop.data as CloudForgetData;
+          const ok = crystal.forget(data.memory_id);
+          process.stderr.write(`[relay-poller] chatgpt: forget memory #${data.memory_id} from ${drop.agent_id}: ${ok ? 'done' : 'not found'}\n`);
+          break;
+        }
+        case 'attachment': {
+          const data = drop.data as CloudAttachmentData;
+          const result = await fetchAndSaveAttachment(data, drop.agent_id, relayKey);
+          if (result) attachments++;
+          break;
+        }
+        default:
+          process.stderr.write(`[relay-poller] chatgpt: unknown drop type "${drop.type}" ... skipping\n`);
+      }
+
+      await confirmBlob('chatgpt', blob.id);
+    } catch (err: any) {
+      process.stderr.write(`[relay-poller] chatgpt: error processing ${blob.id}: ${err.message}\n`);
+      errors++;
+    }
+  }
+
+  // Also poll for attachment blobs that are standalone (not referenced by a metadata drop)
+  // These get cleaned up separately since their metadata drops reference them
+  const attResp = await fetch(`${RELAY_URL}/pickup/chatgpt-attachments`, {
+    headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+  });
+
+  if (attResp.ok) {
+    const attData = await attResp.json() as { count: number; blobs: BlobInfo[] };
+    if (attData.count > 0) {
+      process.stderr.write(`[relay-poller] chatgpt-attachments: ${attData.count} blob(s) (cleaned up after metadata processing)\n`);
+    }
+    // Attachment blobs are fetched when processing their metadata drops.
+    // Any orphaned blobs here get cleaned up by the 24h TTL cron.
+  }
+
+  return { ingested, attachments, errors };
+}
+
+// ── Ingest a single conversation turn from cloud MCP ──
+
+async function ingestConversationDrop(crystal: Crystal, drop: CloudDrop, data: CloudConversationData): Promise<number> {
+  const maxSingleChunkChars = 2000 * 4;
+  const chunks: Chunk[] = [];
+  const sessionTag = data.session_id ? `cloud:${data.session_id}` : `cloud:${drop.timestamp.slice(0, 10)}`;
+
+  // Main text content
+  const text = data.content;
+  if (text.length <= maxSingleChunkChars) {
+    chunks.push({
+      text,
+      role: data.role as 'user' | 'assistant',
+      source_type: 'conversation',
+      source_id: sessionTag,
+      agent_id: drop.agent_id,
+      token_count: Math.ceil(text.length / 4),
+      created_at: drop.timestamp,
+    });
+  } else {
+    for (const ct of crystal.chunkText(text)) {
+      chunks.push({
+        text: ct,
+        role: data.role as 'user' | 'assistant',
+        source_type: 'conversation',
+        source_id: sessionTag,
+        agent_id: drop.agent_id,
+        token_count: Math.ceil(ct.length / 4),
+        created_at: drop.timestamp,
+      });
+    }
+  }
+
+  // If there are tool calls, ingest those as separate chunks too
+  if (data.tool_calls?.length) {
+    for (const tc of data.tool_calls) {
+      const toolText = `[Tool: ${tc.tool_name}] Args: ${tc.arguments}${tc.result ? `\nResult: ${tc.result}` : ''}`;
+      chunks.push({
+        text: toolText,
+        role: 'assistant',
+        source_type: 'tool_call',
+        source_id: sessionTag,
+        agent_id: drop.agent_id,
+        token_count: Math.ceil(toolText.length / 4),
+        created_at: drop.timestamp,
+      });
+    }
+  }
+
+  const count = await crystal.ingest(chunks);
+
+  // Write raw JSON transcript
+  try {
+    const remotePaths = ensureLdm(drop.agent_id);
+    const jsonlPath = join(remotePaths.transcripts, `cloud-${drop.timestamp.replace(/[:.]/g, '-')}.jsonl`);
+    const line = JSON.stringify({
+      type: 'conversation',
+      agent_id: drop.agent_id,
+      timestamp: drop.timestamp,
+      role: data.role,
+      content: data.content,
+      session_id: data.session_id,
+      turn_index: data.turn_index,
+      model: data.model,
+      tool_calls: data.tool_calls,
+      raw_json: data.raw_json,
+    });
+    appendFileSync(jsonlPath, line + '\n');
+
+    // Daily breadcrumb
+    appendDailyBreadcrumb(drop.agent_id, data.role === 'user' ? data.content : `[${data.model || 'assistant'}] ${data.content.slice(0, 80)}`);
+  } catch (fileErr: any) {
+    process.stderr.write(`[relay-poller] chatgpt file tree write failed (non-fatal): ${fileErr.message}\n`);
+  }
+
+  if (count > 0) {
+    process.stderr.write(`[relay-poller] chatgpt: ${count} chunk(s) from ${drop.agent_id} (${data.role}, turn ${data.turn_index ?? '?'})\n`);
+  }
+
+  return count;
+}
+
+// ── Fetch and save binary attachment ──
+
+async function fetchAndSaveAttachment(data: CloudAttachmentData, agentId: string, relayKey: Buffer): Promise<boolean> {
+  try {
+    // The r2_key is in chatgpt-attachments/{id} format. Extract the blob ID.
+    const blobId = data.r2_key.split('/').pop();
+    if (!blobId) {
+      process.stderr.write(`[relay-poller] chatgpt: invalid attachment r2_key: ${data.r2_key}\n`);
+      return false;
+    }
+
+    // Fetch the encrypted binary from relay
+    const blobResp = await fetch(`${RELAY_URL}/pickup/chatgpt-attachments/${blobId}`, {
+      headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+    });
+
+    if (!blobResp.ok) {
+      process.stderr.write(`[relay-poller] chatgpt: failed to fetch attachment ${blobId}: ${blobResp.status}\n`);
+      return false;
+    }
+
+    const encryptedText = await blobResp.text();
+    const encryptedPayload = JSON.parse(encryptedText) as { v: number; nonce: string; data: string };
+
+    // Decrypt: the cloud relay.ts uses AES-GCM with concatenated ciphertext+tag (Web Crypto format).
+    // The "data" field is base64 of the raw AES-GCM encrypt() output (ciphertext + 16-byte auth tag).
+    const nonce = Buffer.from(encryptedPayload.nonce, 'base64');
+    const encryptedData = Buffer.from(encryptedPayload.data, 'base64');
+    // Last 16 bytes are the GCM auth tag
+    const ciphertext = encryptedData.subarray(0, encryptedData.length - 16);
+    const tag = encryptedData.subarray(encryptedData.length - 16);
+
+    const decipher = createDecipheriv('aes-256-gcm', relayKey, nonce);
+    decipher.setAuthTag(tag);
+    const decryptedBuf = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+
+    // Save to agent's attachments directory
+    const remotePaths = ensureLdm(agentId);
+    const attachmentsDir = join(remotePaths.agentRoot, 'memory', 'attachments');
+    if (!existsSync(attachmentsDir)) mkdirSync(attachmentsDir, { recursive: true });
+
+    const safeFilename = data.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const filePath = join(attachmentsDir, `${blobId}-${safeFilename}`);
+    writeFileSync(filePath, decryptedBuf);
+
+    // Write metadata sidecar
+    const metaPath = filePath + '.meta.json';
+    writeFileSync(metaPath, JSON.stringify({
+      filename: data.filename,
+      mime_type: data.mime_type,
+      size_bytes: data.size_bytes,
+      source: data.source,
+      surface: data.surface,
+      context: data.context,
+      session_id: data.session_id,
+      agent_id: agentId,
+      saved_at: new Date().toISOString(),
+    }, null, 2));
+
+    // Confirm pickup of attachment blob
+    await confirmBlob('chatgpt-attachments', blobId);
+
+    process.stderr.write(`[relay-poller] chatgpt: saved attachment ${data.filename} (${data.mime_type}, ${(data.size_bytes / 1024).toFixed(1)}KB) from ${agentId}\n`);
+    return true;
+  } catch (err: any) {
+    process.stderr.write(`[relay-poller] chatgpt: attachment save failed: ${err.message}\n`);
+    return false;
+  }
+}
+
+// ── Helpers ──
+
+async function confirmBlob(channel: string, id: string): Promise<void> {
+  await fetch(`${RELAY_URL}/confirm/${channel}/${id}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${RELAY_TOKEN}` },
+  });
+}
+
+function appendDailyBreadcrumb(agentId: string, text: string): void {
+  try {
+    const remotePaths = ensureLdm(agentId);
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10);
+    const dailyPath = join(remotePaths.daily, `${dateStr}.md`);
+    if (!existsSync(dailyPath)) {
+      writeFileSync(dailyPath, `# ${dateStr} - ${agentId} Daily Log (via relay)\n\n`);
+    }
+    if (text) {
+      const snippet = text.slice(0, 120).replace(/\n/g, ' ').trim();
+      appendFileSync(dailyPath, `- **${now.toISOString().slice(11, 16)}** [relay] ${snippet}\n`);
+    }
+  } catch {}
+}
+
+// ── Main poll (both channels) ──
+
+async function pollOnce(): Promise<{ ingested: number; errors: number; chatgptIngested: number; chatgptAttachments: number }> {
+  if (!RELAY_URL || !RELAY_TOKEN) {
+    throw new Error('CRYSTAL_RELAY_URL and CRYSTAL_RELAY_TOKEN must be set');
+  }
+
+  const relayKey = loadRelayKey();
+  const config = resolveConfig();
+  const crystal = new Crystal(config);
+  await crystal.init();
+
+  // Poll both channels
+  const conv = await pollConversations(crystal, relayKey);
+  const chatgpt = await pollChatgpt(crystal, relayKey);
+
+  return {
+    ingested: conv.ingested + chatgpt.ingested,
+    errors: conv.errors + chatgpt.errors,
+    chatgptIngested: chatgpt.ingested,
+    chatgptAttachments: chatgpt.attachments,
+  };
 }
 
 // ── Commands channel polling ──
@@ -416,12 +748,14 @@ if (args.includes('--status')) {
   const state = loadState();
   const mode = (RELAY_URL && RELAY_TOKEN) ? 'configured' : 'not configured';
   console.log(`Relay poller status:`);
-  console.log(`  Relay URL:      ${RELAY_URL || '(not set)'}`);
-  console.log(`  Mode:           ${mode}`);
-  console.log(`  Last poll:      ${state.lastPoll || 'never'}`);
-  console.log(`  Total ingested: ${state.totalIngested}`);
-  console.log(`  Last delta:     ${state.lastMirrorPush || 'never'}`);
-  console.log(`  Delta watermark: chunk ID ${state.lastDeltaChunkId || 0}`);
+  console.log(`  Relay URL:         ${RELAY_URL || '(not set)'}`);
+  console.log(`  Mode:              ${mode}`);
+  console.log(`  Last poll:         ${state.lastPoll || 'never'}`);
+  console.log(`  Total ingested:    ${state.totalIngested} (conversations)`);
+  console.log(`  ChatGPT ingested:  ${state.totalChatgptIngested} (cloud MCP)`);
+  console.log(`  Attachments saved: ${state.totalAttachments}`);
+  console.log(`  Last delta:        ${state.lastMirrorPush || 'never'}`);
+  console.log(`  Delta watermark:   chunk ID ${state.lastDeltaChunkId || 0}`);
   process.exit(0);
 }
 
@@ -443,14 +777,17 @@ if (args.includes('--push-mirror') || args.includes('--push-delta')) {
     process.stderr.write(`[relay-poller] watching (every ${POLL_INTERVAL / 1000}s)...\n`);
     while (true) {
       try {
-        const { ingested, errors } = await pollOnce();
+        const result = await pollOnce();
         const state = loadState();
         state.lastPoll = new Date().toISOString();
-        state.totalIngested += ingested;
+        state.totalIngested += result.ingested;
+        state.totalChatgptIngested += result.chatgptIngested;
+        state.totalAttachments += result.chatgptAttachments;
         saveState(state);
 
-        if (ingested > 0) {
-          process.stderr.write(`[relay-poller] poll complete: ${ingested} ingested, ${errors} errors\n`);
+        const totalNew = result.ingested + result.chatgptAttachments;
+        if (totalNew > 0) {
+          process.stderr.write(`[relay-poller] poll complete: ${result.ingested} ingested, ${result.chatgptAttachments} attachments, ${result.errors} errors\n`);
           // Push delta chunks after successful ingestion
           try {
             await pushDelta();
@@ -478,16 +815,19 @@ if (args.includes('--push-mirror') || args.includes('--push-delta')) {
 } else {
   // Single poll (cron mode)
   pollOnce()
-    .then(({ ingested, errors }) => {
+    .then((result) => {
       const state = loadState();
       state.lastPoll = new Date().toISOString();
-      state.totalIngested += ingested;
+      state.totalIngested += result.ingested;
+      state.totalChatgptIngested += result.chatgptIngested;
+      state.totalAttachments += result.chatgptAttachments;
       saveState(state);
 
-      if (ingested > 0) {
-        process.stderr.write(`[relay-poller] ${ingested} chunks ingested, ${errors} errors\n`);
+      const totalNew = result.ingested + result.chatgptAttachments;
+      if (totalNew > 0) {
+        process.stderr.write(`[relay-poller] ${result.ingested} chunks ingested, ${result.chatgptAttachments} attachments, ${result.errors} errors\n`);
       }
-      process.exit(errors > 0 ? 1 : 0);
+      process.exit(result.errors > 0 ? 1 : 0);
     })
     .catch(err => {
       process.stderr.write(`[relay-poller] error: ${err.message}\n`);

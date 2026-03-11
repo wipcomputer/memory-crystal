@@ -6,7 +6,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, copyFileSyn
 import { join, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ldmPaths, scaffoldLdm, deployCaptureScript, deployBackupScript, installCron, getAgentId, loadAgentConfig, saveAgentConfig } from './ldm.js';
+import { ldmPaths, scaffoldLdm, deployCaptureScript, deployBackupScript, installCron, getAgentId } from './ldm.js';
 
 const HOME = process.env.HOME || '';
 const LDM_ROOT = join(HOME, '.ldm');
@@ -337,11 +337,9 @@ export function configureCCHook(): void {
 export function registerMCPServer(): void {
   const mcpServerPath = join(LDM_ROOT, 'extensions', 'memory-crystal', 'dist', 'mcp-server.js');
 
-  const addCmd = `claude mcp add --scope user -e OPENCLAW_HOME=${OC_ROOT} memory-crystal -- node "${mcpServerPath}"`;
-
   // Try using claude CLI
   try {
-    execSync(addCmd, {
+    execSync(`claude mcp add --scope user memory-crystal -- node "${mcpServerPath}"`, {
       encoding: 'utf-8',
       stdio: 'pipe',
       timeout: 15000,
@@ -353,7 +351,7 @@ export function registerMCPServer(): void {
     if (output.includes('already exists')) {
       try {
         execSync('claude mcp remove memory-crystal --scope user', { encoding: 'utf-8', stdio: 'pipe', timeout: 10000 });
-        execSync(addCmd, { encoding: 'utf-8', stdio: 'pipe', timeout: 15000 });
+        execSync(`claude mcp add --scope user memory-crystal -- node "${mcpServerPath}"`, { encoding: 'utf-8', stdio: 'pipe', timeout: 15000 });
       } catch {
         // If re-add fails, the old registration still works
       }
@@ -374,7 +372,6 @@ export function registerMCPServer(): void {
   config.mcpServers['memory-crystal'] = {
     command: 'node',
     args: [mcpServerPath],
-    env: { OPENCLAW_HOME: OC_ROOT },
   };
 
   mkdirSync(join(HOME, '.claude'), { recursive: true });
@@ -526,23 +523,6 @@ export async function runInstallOrUpdate(options: {
   // Step 1: Scaffold LDM (idempotent)
   scaffoldLdm(agentId);
   steps.push(`LDM scaffolded for agent "${agentId}"`);
-
-  // Step 1b: Ensure agentId is in agent config.json
-  const existingCfg = loadAgentConfig(agentId);
-  if (existingCfg && !existingCfg.agentId) {
-    existingCfg.agentId = agentId;
-    saveAgentConfig(agentId, existingCfg);
-    steps.push(`Added agentId "${agentId}" to existing config.json`);
-  } else if (!existingCfg) {
-    const harness = agentId.startsWith('oc-') ? 'openclaw' : 'claude-code-cli';
-    saveAgentConfig(agentId, {
-      agentId,
-      agent: agentId.startsWith('oc-') ? agentId.replace(/^oc-/, '').replace(/-[^-]+$/, '') : 'cc',
-      harness,
-      created: new Date().toISOString().slice(0, 10),
-    });
-    steps.push(`Created config.json for agent "${agentId}"`);
-  }
 
   // Step 2: Database awareness
   if (state.crystalDbExists) {
