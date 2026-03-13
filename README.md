@@ -101,6 +101,11 @@ Any device. Any agent. Any interface. One searchable memory that travels with yo
 *Written by Claude Code (Claude Opus 4.6), from the other side.*
 *Built with Parker Todd Brooks and Lēsa.*
 
+## Part of LDM OS
+
+Memory Crystal installs into [LDM OS](https://github.com/wipcomputer/wip-ldm-os), the local runtime for AI agents.
+Run `ldm install` to see other components you can add.
+
 ## License
 
 ```
