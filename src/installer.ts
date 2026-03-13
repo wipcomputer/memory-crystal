@@ -484,6 +484,46 @@ export function formatUpdateSummary(oldVersion: string, newVersion: string): str
   return lines.join('\n');
 }
 
+// ── LDM CLI detection ──
+
+/** Check if the ldm CLI is available on PATH. */
+function ldmCliAvailable(): boolean {
+  try {
+    execSync('ldm --version', { stdio: 'pipe', timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Run ldm CLI for generic deployment (scaffold, copy to extensions, MCP, hooks). */
+function runLdmInstall(repoDir: string): { ok: boolean; steps: string[] } {
+  const steps: string[] = [];
+
+  // Ensure LDM is initialized (skip component picker)
+  try {
+    execSync('ldm init --yes --none', { stdio: 'pipe', timeout: 30000 });
+    steps.push('LDM initialized via ldm CLI');
+  } catch (err: any) {
+    const msg = (err.stderr || err.message || '').toString().trim();
+    // "already initialized" is fine
+    if (!msg.includes('already')) {
+      steps.push(`ldm init warning: ${msg.slice(0, 120)}`);
+    }
+  }
+
+  // Deploy this repo via ldm install
+  try {
+    execSync(`ldm install "${repoDir}"`, { stdio: 'pipe', timeout: 60000 });
+    steps.push('Generic deployment handled by ldm install (extensions, MCP, hooks)');
+    return { ok: true, steps };
+  } catch (err: any) {
+    const msg = (err.stderr || err.message || '').toString().trim();
+    steps.push(`ldm install failed: ${msg.slice(0, 200)}`);
+    return { ok: false, steps };
+  }
+}
+
 // ── Full install/update orchestration ──
 
 export interface InstallResult {
@@ -523,7 +563,33 @@ export async function runInstallOrUpdate(options: {
     };
   }
 
-  // Step 1: Scaffold LDM (idempotent)
+  // ── LDM CLI delegation ──
+  // If ldm CLI is on PATH, use it for generic deployment (scaffold, copy to
+  // extensions, MCP registration, hook configuration). Crystal init then only
+  // handles MC-specific setup: DB backup, role, pairing, cron, scripts.
+  const hasLdmCli = ldmCliAvailable();
+  let ldmDelegated = false;
+
+  if (hasLdmCli) {
+    const repoRoot = getRepoRoot();
+    const delegateResult = runLdmInstall(repoRoot);
+    steps.push(...delegateResult.steps);
+
+    if (delegateResult.ok) {
+      ldmDelegated = true;
+      // ldm install handled: scaffold, deploy to extensions, deps, CC hook, MCP, OC deploy
+      const ldmExtDir = join(LDM_ROOT, 'extensions', 'memory-crystal');
+      if (existsSync(ldmExtDir)) deployedTo.push(ldmExtDir);
+      const ocExtDir = join(OC_ROOT, 'extensions', 'memory-crystal');
+      if (existsSync(ocExtDir)) deployedTo.push(ocExtDir);
+    }
+    // If ldm install failed, fall through to self-contained behavior
+  }
+
+  // Step 1: Scaffold LDM (idempotent) -- skip if ldm CLI handled it
+  if (ldmDelegated) {
+    steps.push('Scaffold + agent config handled by ldm CLI');
+  } else {
   scaffoldLdm(agentId);
   steps.push(`LDM scaffolded for agent "${agentId}"`);
 
@@ -543,8 +609,9 @@ export async function runInstallOrUpdate(options: {
     });
     steps.push(`Created config.json for agent "${agentId}"`);
   }
+  } // end of !ldmDelegated scaffold block
 
-  // Step 2: Database awareness
+  // Step 2: Database awareness (MC-specific, always runs)
   if (state.crystalDbExists) {
     // Existing database found. Report what we see.
     try {
@@ -619,6 +686,8 @@ export async function runInstallOrUpdate(options: {
     steps.push('No existing database. A new one will be created on first capture.');
   }
 
+  // Generic deployment steps -- skip if ldm CLI handled them
+  if (!ldmDelegated) {
   // Step 4: Deploy code to LDM extensions
   const ldmResult = deployToLdm();
   steps.push(`Code deployed to ${ldmResult.extensionDir}`);
@@ -651,8 +720,9 @@ export async function runInstallOrUpdate(options: {
   } else {
     steps.push('MCP server already registered');
   }
+  } // end of !ldmDelegated generic deployment block
 
-  // Step 6: Deploy capture + backup scripts
+  // Step 6: Deploy capture + backup scripts (MC-specific, always runs)
   try {
     deployCaptureScript();
     steps.push('Capture script deployed');
@@ -678,8 +748,8 @@ export async function runInstallOrUpdate(options: {
     steps.push(`Backup script failed: ${err.message}`);
   }
 
-  // Step 7: OpenClaw (if detected)
-  if (state.ocDetected) {
+  // Step 7: OpenClaw (if detected, skip if ldm CLI handled it)
+  if (!ldmDelegated && state.ocDetected) {
     try {
       const ocResult = deployToOpenClaw();
       steps.push(`OC plugin deployed to ${ocResult.extensionDir}`);
@@ -731,6 +801,14 @@ export async function runInstallOrUpdate(options: {
     } catch (err: any) {
       steps.push(`Pairing failed: ${err.message}`);
     }
+  }
+
+  // ── LDM OS tip ──
+  if (hasLdmCli) {
+    steps.push('Tip: Run "ldm install" to see other LDM OS components.');
+  } else {
+    steps.push('Tip: Install LDM OS for more components: npm install -g @wipcomputer/wip-ldm-os');
+    steps.push('Then run: ldm install');
   }
 
   return {
