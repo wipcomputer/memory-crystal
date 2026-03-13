@@ -410,6 +410,13 @@ export class Crystal {
       BEGIN
         INSERT INTO chunks_fts(rowid, text) VALUES (NEW.id, NEW.text);
       END;
+
+      -- Sync trigger: clean up FTS and vec on chunk delete
+      CREATE TRIGGER IF NOT EXISTS chunks_cleanup AFTER DELETE ON chunks
+      BEGIN
+        DELETE FROM chunks_vec WHERE chunk_id = OLD.id;
+        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', OLD.id, OLD.text);
+      END;
     `);
 
     // Check if chunks_vec exists and get its dimensions
@@ -1395,6 +1402,52 @@ export class Crystal {
 
     walk(rootPath);
     return results;
+  }
+
+  // ── Orphan Cleanup ──
+
+  /** Clean orphaned entries in chunks_vec and chunks_fts that no longer have
+   *  corresponding rows in the chunks table. Returns counts of what was found/cleaned. */
+  cleanOrphans(options?: { dryRun?: boolean }): {
+    orphanedVec: number; orphanedFts: number;
+    cleanedVec: number; cleanedFts: number; dryRun: boolean;
+  } {
+    const db = this.sqliteDb!;
+    const dryRun = options?.dryRun ?? false;
+
+    const orphanedVec = (db.prepare(
+      'SELECT COUNT(*) as cnt FROM chunks_vec WHERE chunk_id NOT IN (SELECT id FROM chunks)'
+    ).get() as any).cnt;
+
+    const orphanedFts = (db.prepare(
+      'SELECT COUNT(*) as cnt FROM chunks_fts WHERE rowid NOT IN (SELECT id FROM chunks)'
+    ).get() as any).cnt;
+
+    if (dryRun) {
+      return { orphanedVec, orphanedFts, cleanedVec: 0, cleanedFts: 0, dryRun: true };
+    }
+
+    let cleanedVec = 0;
+    if (orphanedVec > 0) {
+      const ids = db.prepare(
+        'SELECT chunk_id FROM chunks_vec WHERE chunk_id NOT IN (SELECT id FROM chunks)'
+      ).all() as Array<{ chunk_id: number }>;
+      const del = db.prepare('DELETE FROM chunks_vec WHERE chunk_id = ?');
+      const BATCH = 1000;
+      for (let i = 0; i < ids.length; i += BATCH) {
+        const batch = ids.slice(i, i + BATCH);
+        db.transaction(() => { for (const r of batch) { del.run(r.chunk_id); cleanedVec++; } })();
+      }
+    }
+
+    let cleanedFts = 0;
+    if (orphanedFts > 0) {
+      db.exec('DELETE FROM chunks_fts');
+      db.exec('INSERT INTO chunks_fts(rowid, text) SELECT id, text FROM chunks');
+      cleanedFts = orphanedFts;
+    }
+
+    return { orphanedVec, orphanedFts, cleanedVec, cleanedFts, dryRun: false };
   }
 
   // ── Cleanup ──
