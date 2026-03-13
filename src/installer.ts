@@ -81,6 +81,18 @@ function getRepoRoot(): string {
   return dirname(thisDir);
 }
 
+/** Check npm registry for the latest published version. Returns null on failure. */
+function getLatestNpmVersion(): string | null {
+  const names = ['@wipcomputer/memory-crystal', 'memory-crystal'];
+  for (const name of names) {
+    try {
+      const v = execSync(`npm view ${name} version 2>/dev/null`, { encoding: 'utf-8', timeout: 10000 }).trim();
+      if (v) return v;
+    } catch {}
+  }
+  return null;
+}
+
 export function detectInstallState(): InstallState {
   const ldmExtDir = join(LDM_ROOT, 'extensions', 'memory-crystal');
   const ocExtDir = join(OC_ROOT, 'extensions', 'memory-crystal');
@@ -89,9 +101,11 @@ export function detectInstallState(): InstallState {
   // Installed version from LDM extension
   const installedVersion = readVersion(join(ldmExtDir, 'package.json'));
 
-  // Repo version from this package
+  // Repo version from this package, or latest from npm if newer
   const repoRoot = getRepoRoot();
-  const repoVersion = readVersion(join(repoRoot, 'package.json')) || '0.0.0';
+  let repoVersion = readVersion(join(repoRoot, 'package.json')) || '0.0.0';
+  const npmVersion = getLatestNpmVersion();
+  if (npmVersion && npmVersion > repoVersion) repoVersion = npmVersion;
 
   // CC hook deployed?
   const ccHookDeployed = existsSync(join(ldmExtDir, 'dist', 'cc-hook.js'));
@@ -575,6 +589,23 @@ export async function runInstallOrUpdate(options: {
       deployedTo: [],
       steps: [`Already at v${state.repoVersion}. Nothing to do.`],
     };
+  }
+
+  // If npm has a newer version, upgrade globally first then re-run
+  if (isUpdate && state.installedVersion) {
+    const npmV = getLatestNpmVersion();
+    if (npmV && npmV > state.installedVersion) {
+      steps.push(`Upgrading v${state.installedVersion} -> v${npmV} via npm...`);
+      try {
+        execSync('npm install -g @wipcomputer/memory-crystal 2>&1', { encoding: 'utf-8', timeout: 60000, stdio: 'pipe' });
+        steps.push(`Installed @wipcomputer/memory-crystal@${npmV}`);
+        steps.push('Restarting init with updated code...');
+        execSync('crystal init', { stdio: 'inherit', timeout: 120000 });
+        return { action: 'updated', version: npmV, deployedTo: ['global', 'ldm', 'openclaw'], steps };
+      } catch (err: any) {
+        steps.push(`npm upgrade failed: ${(err as Error).message}. Continuing with local code.`);
+      }
+    }
   }
 
   // ── LDM CLI delegation ──
