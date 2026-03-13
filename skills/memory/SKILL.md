@@ -55,7 +55,7 @@ npm link
 - One command, done
 
 ```bash
-npm install -g memory-crystal
+npm install -g @wipcomputer/memory-crystal
 ```
 
 If npm is not available, check if the user has Node.js installed (`node --version`). They need Node.js 20+. If not installed, tell them to install it from https://nodejs.org first.
@@ -280,7 +280,7 @@ If the user already has a Crystal Core on another machine:
 
 ### Step 1: Install the package
 
-Same as above (developer fork or `npm install -g memory-crystal`).
+Same as above (developer fork or `npm install -g @wipcomputer/memory-crystal`).
 
 ### Step 2: Initialize as a Node
 

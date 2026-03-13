@@ -72,7 +72,7 @@ function getRepoRoot(): string {
     if (existsSync(pkgPath)) {
       try {
         const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-        if (pkg.name === 'memory-crystal') return dir;
+        if (pkg.name === '@wipcomputer/memory-crystal') return dir;
       } catch {}
     }
     dir = dirname(dir);
@@ -496,6 +496,20 @@ function ldmCliAvailable(): boolean {
   }
 }
 
+/** Install LDM OS globally if not already on PATH. */
+function bootstrapLdmOs(steps: string[]): boolean {
+  try {
+    steps.push('Installing LDM OS infrastructure...');
+    execSync('npm install -g @wipcomputer/wip-ldm-os', { stdio: 'pipe', timeout: 120000 });
+    execSync('ldm --version', { stdio: 'pipe', timeout: 5000 });
+    steps.push('LDM OS installed.');
+    return true;
+  } catch {
+    steps.push('LDM OS install skipped (npm offline or permissions issue). Using standalone.');
+    return false;
+  }
+}
+
 /** Run ldm CLI for generic deployment (scaffold, copy to extensions, MCP, hooks). */
 function runLdmInstall(repoDir: string): { ok: boolean; steps: string[] } {
   const steps: string[] = [];
@@ -567,7 +581,10 @@ export async function runInstallOrUpdate(options: {
   // If ldm CLI is on PATH, use it for generic deployment (scaffold, copy to
   // extensions, MCP registration, hook configuration). Crystal init then only
   // handles MC-specific setup: DB backup, role, pairing, cron, scripts.
-  const hasLdmCli = ldmCliAvailable();
+  let hasLdmCli = ldmCliAvailable();
+  if (!hasLdmCli) {
+    hasLdmCli = bootstrapLdmOs(steps);
+  }
   let ldmDelegated = false;
 
   if (hasLdmCli) {
@@ -807,7 +824,7 @@ export async function runInstallOrUpdate(options: {
   // ── LDM OS tip ──
   if (hasLdmCli) {
     steps.push('Tip: Run "ldm install" to see more components you can add.');
-  } else {
+  } else if (!ldmDelegated) {
     steps.push('Tip: Install LDM OS for more components: npm install -g @wipcomputer/wip-ldm-os');
   }
 
