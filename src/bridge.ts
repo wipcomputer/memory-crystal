@@ -33,6 +33,11 @@ export function isBridgeRegistered(): boolean {
       if (config.mcpServers && config.mcpServers['lesa-bridge']) return true;
     }
   } catch {}
+  // Check user scope via claude mcp get
+  try {
+    const r = execSync('claude mcp get lesa-bridge 2>&1', { encoding: 'utf-8', timeout: 5000 });
+    if (!r.includes('not found') && !r.includes('error')) return true;
+  } catch {}
   return false;
 }
 
