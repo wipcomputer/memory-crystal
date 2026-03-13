@@ -3,7 +3,7 @@
 // crystal search "query" | crystal remember "fact" | crystal forget <id> | crystal status
 
 import { Crystal, resolveConfig, createCrystal, type Chunk } from './core.js';
-import { scaffoldLdm, ldmPaths, ensureLdm, getAgentId, deployCaptureScript, deployBackupScript, installCron, installBackupLaunchAgent } from './ldm.js';
+import { scaffoldLdm, ldmPaths, ensureLdm, getAgentId, deployCaptureScript, deployBackupScript, installCron, installBackupLaunchAgent, removeCron } from './ldm.js';
 import { existsSync, copyFileSync, symlinkSync, lstatSync, unlinkSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -28,6 +28,7 @@ Commands:
   crystal demote [--relay <url>]              Demote this device to Crystal Node
   crystal doctor                              Full health check with fix suggestions
 
+  crystal cleanup [--dry-run]                  Clean orphaned vec/FTS entries
   crystal backup                              Run a backup now
   crystal backup setup                        Install daily backup (LaunchAgent, 03:00)
   crystal backup --keep <n>                   Keep last n backups (default: 7)
@@ -182,6 +183,131 @@ async function main() {
       } catch (err: any) {
         process.exit(1);
       }
+    }
+    return;
+  }
+
+  // ── Cleanup (no Crystal init needed, opens own DB connection for VACUUM) ──
+
+  if (command === 'cleanup') {
+    const dryRun = 'dry-run' in flags;
+    const config = resolveConfig();
+    const dbPath = join(config.dataDir, 'crystal.db');
+
+    if (!existsSync(dbPath)) {
+      console.error(`Database not found: ${dbPath}`);
+      process.exit(1);
+    }
+
+    const DatabaseCtor = (await import('better-sqlite3')).default;
+    const sqliteVecMod = await import('sqlite-vec');
+
+    const db = new DatabaseCtor(dbPath);
+    db.pragma('journal_mode = WAL');
+    sqliteVecMod.load(db);
+
+    const chunkCount = (db.prepare('SELECT COUNT(*) as cnt FROM chunks').get() as any).cnt;
+    console.log('Crystal Cleanup');
+    console.log(`  Database: ${dbPath}`);
+    console.log(`  Chunks:   ${chunkCount.toLocaleString()}`);
+
+    const orphanedVec = (db.prepare(
+      'SELECT COUNT(*) as cnt FROM chunks_vec WHERE chunk_id NOT IN (SELECT id FROM chunks)'
+    ).get() as any).cnt;
+    const orphanedFts = (db.prepare(
+      'SELECT COUNT(*) as cnt FROM chunks_fts WHERE rowid NOT IN (SELECT id FROM chunks)'
+    ).get() as any).cnt;
+
+    console.log(`\nOrphans found:`);
+    console.log(`  Vec:   ${orphanedVec.toLocaleString()} orphaned vector entries`);
+    console.log(`  FTS:   ${orphanedFts.toLocaleString()} orphaned full-text entries`);
+
+    if (orphanedVec === 0 && orphanedFts === 0) {
+      console.log(`\nNo orphans found. Database is clean.`);
+      db.close();
+      return;
+    }
+
+    if (dryRun) {
+      console.log(`\n(dry run) Run "crystal cleanup" without --dry-run to remove them.`);
+      db.close();
+      return;
+    }
+
+    // Backup before cleanup
+    const backupPath = dbPath + `.pre-cleanup-${Date.now()}`;
+    console.log(`\nBacking up database...`);
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+      copyFileSync(dbPath, backupPath);
+      const bSize = statSync(backupPath).size;
+      console.log(`  Backup: ${backupPath} (${(bSize / 1024 / 1024 / 1024).toFixed(2)} GB)`);
+    } catch (err: any) {
+      console.error(`Backup failed: ${err.message}`);
+      console.error('Aborting cleanup.');
+      db.close();
+      process.exit(1);
+    }
+
+    // Pause cron capture
+    console.log(`\nPausing capture cron...`);
+    removeCron();
+    console.log(`  Cron paused.`);
+
+    try {
+      // Clean orphaned vec entries in batches
+      if (orphanedVec > 0) {
+        console.log(`\nCleaning orphaned vectors...`);
+        const ids = db.prepare(
+          'SELECT chunk_id FROM chunks_vec WHERE chunk_id NOT IN (SELECT id FROM chunks)'
+        ).all() as Array<{ chunk_id: number }>;
+        const delVec = db.prepare('DELETE FROM chunks_vec WHERE chunk_id = ?');
+        const BATCH = 1000;
+        let cleaned = 0;
+        for (let i = 0; i < ids.length; i += BATCH) {
+          const batch = ids.slice(i, i + BATCH);
+          db.transaction(() => { for (const r of batch) { delVec.run(r.chunk_id); cleaned++; } })();
+          if (cleaned % 10000 === 0 || i + BATCH >= ids.length) {
+            process.stderr.write(`  ${cleaned.toLocaleString()} / ${ids.length.toLocaleString()} vectors cleaned\r`);
+          }
+        }
+        console.log(`  ${cleaned.toLocaleString()} orphaned vectors removed.                  `);
+      }
+
+      // Rebuild FTS5 index from scratch
+      if (orphanedFts > 0) {
+        console.log(`\nRebuilding FTS index...`);
+        const ftsStart = Date.now();
+        db.exec('DELETE FROM chunks_fts');
+        db.exec('INSERT INTO chunks_fts(rowid, text) SELECT id, text FROM chunks');
+        const ftsElapsed = ((Date.now() - ftsStart) / 1000).toFixed(1);
+        console.log(`  FTS rebuilt from ${chunkCount.toLocaleString()} chunks in ${ftsElapsed}s.`);
+      }
+
+      // VACUUM
+      console.log(`\nVacuuming database...`);
+      const preSize = statSync(dbPath).size;
+      db.exec('VACUUM');
+      const postSize = statSync(dbPath).size;
+      const savedMB = ((preSize - postSize) / 1024 / 1024).toFixed(0);
+      console.log(`  Before: ${(preSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
+      console.log(`  After:  ${(postSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
+      console.log(`  Saved:  ${savedMB} MB`);
+
+      // Verify
+      const postChunks = (db.prepare('SELECT COUNT(*) as cnt FROM chunks').get() as any).cnt;
+      const postFts = (db.prepare('SELECT COUNT(*) as cnt FROM chunks_fts').get() as any).cnt;
+      console.log(`\nVerification:`);
+      console.log(`  Chunks:      ${postChunks.toLocaleString()}`);
+      console.log(`  FTS entries: ${postFts.toLocaleString()}`);
+      console.log(`  Match: ${postChunks === postFts ? 'YES' : 'NO (WARNING: mismatch!)'}`);
+
+      console.log(`\nCleanup complete. Verify search: crystal search "test query"`);
+    } finally {
+      console.log(`\nResuming capture cron...`);
+      installCron();
+      console.log(`  Cron resumed.`);
+      db.close();
     }
     return;
   }
