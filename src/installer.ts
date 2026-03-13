@@ -744,6 +744,16 @@ export async function runInstallOrUpdate(options: {
     steps.push('No existing database. A new one will be created on first capture.');
   }
 
+  // Always sync package.json for version tracking (even if ldm CLI handled deploy)
+  if (ldmDelegated) {
+    const repoRoot = getRepoRoot();
+    const ldmExtDir = join(LDM_ROOT, 'extensions', 'memory-crystal');
+    if (existsSync(ldmExtDir)) copyFileSync(join(repoRoot, 'package.json'), join(ldmExtDir, 'package.json'));
+    const ocExtDir = join(OC_ROOT, 'extensions', 'memory-crystal');
+    if (existsSync(ocExtDir)) copyFileSync(join(repoRoot, 'package.json'), join(ocExtDir, 'package.json'));
+    steps.push(`Version synced to v${readVersion(join(repoRoot, 'package.json')) || 'unknown'}`);
+  }
+
   // Generic deployment steps -- skip if ldm CLI handled them
   if (!ldmDelegated) {
   // Step 4: Deploy code to LDM extensions
