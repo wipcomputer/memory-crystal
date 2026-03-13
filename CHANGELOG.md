@@ -4,6 +4,11 @@
 
 
 
+
+## 0.7.6 (2026-03-13)
+
+Update LDM delegation tips
+
 ## 0.7.5 (2026-03-13)
 
 # Release Notes: Memory Crystal v0.7.5

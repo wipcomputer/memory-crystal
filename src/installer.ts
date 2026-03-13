@@ -571,6 +571,7 @@ export async function runInstallOrUpdate(options: {
   let ldmDelegated = false;
 
   if (hasLdmCli) {
+    steps.push('LDM OS detected. Using ldm install for deployment...');
     const repoRoot = getRepoRoot();
     const delegateResult = runLdmInstall(repoRoot);
     steps.push(...delegateResult.steps);
@@ -805,10 +806,9 @@ export async function runInstallOrUpdate(options: {
 
   // ── LDM OS tip ──
   if (hasLdmCli) {
-    steps.push('Tip: Run "ldm install" to see other LDM OS components.');
+    steps.push('Tip: Run "ldm install" to see more components you can add.');
   } else {
     steps.push('Tip: Install LDM OS for more components: npm install -g @wipcomputer/wip-ldm-os');
-    steps.push('Then run: ldm install');
   }
 
   return {
