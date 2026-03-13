@@ -19,7 +19,7 @@ You use multiple AIs. They don't talk to each other. They can't search what the 
 Open your AI and say:
 
 ```
-Read the SKILL.md at github.com/wipcomputer/memory-crystal/blob/main/skills/memory/SKILL.md
+Read wip.computer/install/memory-crystal.txt
 
 Then explain:
 1. What is Memory Crystal?
