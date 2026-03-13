@@ -86,16 +86,9 @@ Before installing, explain exactly what will be created:
 >
 > Nothing gets installed outside this folder. Nothing phones home. Want me to go ahead?"
 
-### Step 0: Upgrade if already installed
+### Step 0: Install or upgrade the global CLI (ALWAYS run this)
 
-If `crystal` is already on PATH, check if it's current before running init:
-
-```bash
-crystal status 2>/dev/null | head -1
-npm view @wipcomputer/memory-crystal version 2>/dev/null
-```
-
-If npm version is newer, upgrade first. If installed under the old unscoped name (`memory-crystal`), switch to the scoped name:
+**Always run this before crystal init.** Even if crystal is already installed. This ensures the global CLI is the latest version. Never skip this step. Never build from source and copy to extensions instead.
 
 ```bash
 npm uninstall -g memory-crystal 2>/dev/null
