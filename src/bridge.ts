@@ -7,6 +7,12 @@ import { join } from 'node:path';
 
 const HOME = process.env.HOME || '';
 
+function _checkLocalBridge(): boolean {
+  if (existsSync(join(HOME, '.openclaw', 'extensions', 'lesa-bridge', 'dist', 'index.js'))) return true;
+  if (existsSync(join(HOME, '.ldm', 'extensions', 'lesa-bridge', 'dist', 'index.js'))) return true;
+  return false;
+}
+
 // ── Detection ──
 
 export function isBridgeInstalled(): boolean {
@@ -14,7 +20,7 @@ export function isBridgeInstalled(): boolean {
     execSync('which lesa 2>/dev/null', { encoding: 'utf-8' });
     return true;
   } catch {
-    return false;
+    return _checkLocalBridge();
   }
 }
 

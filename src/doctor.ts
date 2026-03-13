@@ -3,7 +3,7 @@
 //
 // Usage: crystal doctor
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { detectRole } from './role.js';
@@ -325,10 +325,19 @@ function checkBackup(): DoctorCheck {
   // Check cron fallback
   try {
     const crontab = execSync('crontab -l 2>/dev/null', { encoding: 'utf-8' });
-    if (crontab.includes('ldm-backup')) {
+    if (crontab.includes('ldm-backup') || (crontab.includes('LDMDevTools') && crontab.includes('backup'))) {
       return { name: 'Backup', status: 'ok', detail: 'cron installed' };
     }
   } catch {}
+
+  // Check if backup files exist (may run through LDM Dev Tools or other path)
+  const backupsDir = join(HOME, '.ldm', 'backups');
+  if (existsSync(backupsDir)) {
+    try {
+      const entries = readdirSync(backupsDir).filter((e: string) => !e.startsWith('.'));
+      if (entries.length > 0) return { name: 'Backup', status: 'ok', detail: `${entries.length} backup(s) in ~/.ldm/backups/` };
+    } catch {}
+  }
 
   return {
     name: 'Backup',
