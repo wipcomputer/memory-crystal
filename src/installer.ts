@@ -610,9 +610,7 @@ export async function runInstallOrUpdate(options: {
       try {
         execSync('npm install -g @wipcomputer/memory-crystal 2>&1', { encoding: 'utf-8', timeout: 60000, stdio: 'pipe' });
         steps.push(`Installed @wipcomputer/memory-crystal@${npmV}`);
-        steps.push('Restarting init with updated code...');
-        execSync('crystal init', { stdio: 'inherit', timeout: 120000 });
-        return { action: 'updated', version: npmV, deployedTo: ['global', 'ldm', 'openclaw'], steps };
+        steps.push('Continuing with updated code...');
       } catch (err: any) {
         steps.push(`npm upgrade failed: ${(err as Error).message}. Continuing with local code.`);
       }
