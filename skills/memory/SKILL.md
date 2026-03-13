@@ -86,6 +86,24 @@ Before installing, explain exactly what will be created:
 >
 > Nothing gets installed outside this folder. Nothing phones home. Want me to go ahead?"
 
+### Step 0: Upgrade if already installed
+
+If `crystal` is already on PATH, check if it's current before running init:
+
+```bash
+crystal status 2>/dev/null | head -1
+npm view @wipcomputer/memory-crystal version 2>/dev/null
+```
+
+If npm version is newer, upgrade first. If installed under the old unscoped name (`memory-crystal`), switch to the scoped name:
+
+```bash
+npm uninstall -g memory-crystal 2>/dev/null
+npm install -g @wipcomputer/memory-crystal
+```
+
+Then proceed to Step 1.
+
 ### Step 1: Initialize
 
 ```bash
