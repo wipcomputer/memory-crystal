@@ -608,9 +608,26 @@ async function handleLdmCommand(command: string, flags: Record<string, string>, 
     const isUpdate = !isFresh && state.needsUpdate;
 
     // If already up to date and not a fresh install
-    if (!isFresh && !isUpdate && !('update' in flags)) {
+    if (!isFresh && !isUpdate && !('update' in flags) && !('dry-run' in flags)) {
       console.log(`Memory Crystal v${state.repoVersion} is already installed and up to date.`);
       console.log(`Run "crystal doctor" to check health.`);
+      return;
+    }
+
+    // Dry-run: show full state and doctor output, then exit
+    if ('dry-run' in flags) {
+      const label = isFresh ? 'not installed' : isUpdate ? `v${state.installedVersion} -> v${state.repoVersion}` : `v${state.repoVersion} (up to date)`;
+      console.log(`Memory Crystal ${label}\n`);
+      const { runDoctor } = await import('./doctor.js');
+      const checks = await runDoctor();
+      for (const c of checks) {
+        const icon = c.status === 'ok' ? '[OK]' : c.status === 'warn' ? '[!!]' : '[XX]';
+        console.log(`  ${icon} ${c.name}: ${c.detail}`);
+        if (c.fix) console.log(`       Fix: ${c.fix}`);
+      }
+      if (isFresh) console.log(`\nRun "crystal init" to install.`);
+      else if (isUpdate) console.log(`\nRun "crystal init" to update.`);
+      else console.log(`\nNo changes needed. Already at latest version.`);
       return;
     }
 
