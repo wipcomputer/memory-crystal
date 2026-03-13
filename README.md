@@ -19,18 +19,25 @@ You use multiple AIs. They don't talk to each other. They can't search what the 
 Open your AI and say:
 
 ```
-Read the SKILL.md at github.com/wipcomputer/memory-crystal/blob/main/skills/memory/SKILL.md.
+Read the SKILL.md at github.com/wipcomputer/memory-crystal/blob/main/skills/memory/SKILL.md
 
-Then explain to me:
-1. What is this tool?
-2. What does it do?
-3. What would it change about how we work together?
+Then explain:
+1. What is Memory Crystal?
+2. What does it install on my system?
+3. What changes for us? (this AI)
+4. What changes across all my AIs?
 
-Then ask me:
-- Do you have more questions?
-- Do you want to install it?
+Check if Memory Crystal is already installed.
 
-If I say yes, run: crystal init
+If it is, show me what I have and what's new.
+
+Then ask:
+- Do you have questions?
+- Want to see a dry run?
+
+If I say yes, run: crystal init --dry-run
+
+Show me exactly what will change. Don't install anything until I say "install".
 ```
 
 Your agent will read the repo, explain everything, and walk you through setup interactively.

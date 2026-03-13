@@ -5,6 +5,11 @@
 
 
 
+
+## 0.7.7 (2026-03-13)
+
+Update install prompt to new standard format. Replaces old 3-question prompt with 4 explain questions, installed check, and dry-run before install.
+
 ## 0.7.6 (2026-03-13)
 
 Update LDM delegation tips

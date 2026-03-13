@@ -67,6 +67,35 @@ export async function runDoctor(): Promise<DoctorCheck[]> {
   return checks;
 }
 
+// ── Helpers ──
+
+/** Check if 1Password SA token can resolve the OpenAI API key at runtime. */
+function checkOpEmbeddings(): DoctorCheck | null {
+  const saTokenLdm = join(HOME, '.ldm', 'secrets', 'op-sa-token');
+  const saTokenOc = join(HOME, '.openclaw', 'secrets', 'op-sa-token');
+  if (!existsSync(saTokenLdm) && !existsSync(saTokenOc)) return null;
+  const saTokenPath = existsSync(saTokenLdm) ? saTokenLdm : saTokenOc;
+  try {
+    const saToken = readFileSync(saTokenPath, 'utf-8').trim();
+    const result = execSync('op read "op://Agent Secrets/OpenAI API/api key" 2>/dev/null', {
+      encoding: 'utf-8',
+      env: { ...process.env, OP_SERVICE_ACCOUNT_TOKEN: saToken },
+      timeout: 10000,
+    }).trim();
+    if (result) {
+      return { name: 'Embeddings', status: 'ok', detail: 'openai (via 1Password)' };
+    }
+  } catch {
+    return {
+      name: 'Embeddings',
+      status: 'warn',
+      detail: '1Password SA token found but op read failed',
+      fix: 'Check that op CLI is installed and SA token is valid',
+    };
+  }
+  return null;
+}
+
 // ── Individual checks ──
 
 function checkVersion(): DoctorCheck {
@@ -188,6 +217,10 @@ function checkEmbeddingProvider(role: string): DoctorCheck {
       detail: provider,
     };
   }
+
+  // Check 1Password SA token (the runtime resolution path used by cron/hooks)
+  const opResult = checkOpEmbeddings();
+  if (opResult) return opResult;
 
   // Nodes don't need local embeddings (Core handles it)
   if (role === 'node') {
