@@ -81,6 +81,17 @@ function getRepoRoot(): string {
   return dirname(thisDir);
 }
 
+/** Compare two semver strings. Returns 1 if a > b, -1 if a < b, 0 if equal. */
+function semverCompare(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+  }
+  return 0;
+}
+
 /** Check npm registry for the latest published version. Returns null on failure. */
 function getLatestNpmVersion(): string | null {
   const names = ['@wipcomputer/memory-crystal', 'memory-crystal'];
@@ -105,7 +116,7 @@ export function detectInstallState(): InstallState {
   const repoRoot = getRepoRoot();
   let repoVersion = readVersion(join(repoRoot, 'package.json')) || '0.0.0';
   const npmVersion = getLatestNpmVersion();
-  if (npmVersion && npmVersion > repoVersion) repoVersion = npmVersion;
+  if (npmVersion && semverCompare(npmVersion, repoVersion) > 0) repoVersion = npmVersion;
 
   // CC hook deployed?
   const ccHookDeployed = existsSync(join(ldmExtDir, 'dist', 'cc-hook.js'));
@@ -594,7 +605,7 @@ export async function runInstallOrUpdate(options: {
   // If npm has a newer version, upgrade globally first then re-run
   if (isUpdate && state.installedVersion) {
     const npmV = getLatestNpmVersion();
-    if (npmV && npmV > state.installedVersion) {
+    if (npmV && semverCompare(npmV, state.installedVersion) > 0) {
       steps.push(`Upgrading v${state.installedVersion} -> v${npmV} via npm...`);
       try {
         execSync('npm install -g @wipcomputer/memory-crystal 2>&1', { encoding: 'utf-8', timeout: 60000, stdio: 'pipe' });
