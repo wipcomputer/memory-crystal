@@ -19,6 +19,10 @@
 
 
 
+## 0.7.22 (2026-03-14)
+
+Remove standalone role
+
 ## 0.7.21 (2026-03-14)
 
 Fix install URL
