@@ -34,7 +34,7 @@ export interface InstallState {
   needsUpdate: boolean;
 
   // Role
-  role: 'core' | 'node' | 'standalone';
+  role: 'core' | 'node';
   relayKeyExists: boolean;
 }
 
@@ -167,8 +167,8 @@ export function detectInstallState(): InstallState {
     cronInstalled = crontab.includes('crystal-capture');
   } catch {}
 
-  // Role detection deferred to async callers; use standalone as sync default
-  const role: 'core' | 'node' | 'standalone' = 'standalone';
+  // Role detection deferred to async callers; use core as sync default
+  const role: 'core' | 'node' = 'core';
 
   const relayKeyExists = existsSync(join(LDM_ROOT, 'secrets', 'crystal-relay-key'));
 
@@ -530,7 +530,7 @@ function bootstrapLdmOs(steps: string[]): boolean {
     steps.push('LDM OS installed.');
     return true;
   } catch {
-    steps.push('LDM OS install skipped (npm offline or permissions issue). Using standalone.');
+    steps.push('LDM OS install skipped (npm offline or permissions issue). Using core mode.');
     return false;
   }
 }

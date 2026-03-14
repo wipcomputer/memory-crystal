@@ -256,8 +256,8 @@ function checkCaptureCron(): DoctorCheck {
 }
 
 function checkRelayConfig(role: ReturnType<typeof detectRole>): DoctorCheck {
-  if (role.role === 'standalone') {
-    return { name: 'Relay', status: 'ok', detail: 'not needed (standalone)' };
+  if (role.role === 'core' && !role.relayUrl) {
+    return { name: 'Relay', status: 'ok', detail: 'not needed (core, no relay configured)' };
   }
 
   if (role.role === 'node') {

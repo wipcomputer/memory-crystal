@@ -922,7 +922,7 @@ async function handleBackfill(flags: Record<string, string>): Promise<void> {
   }
 
   // Check role for relay vs local
-  let role = 'standalone';
+  let role = 'core';
   try {
     const { detectRole } = await import('./role.js');
     role = detectRole().role;

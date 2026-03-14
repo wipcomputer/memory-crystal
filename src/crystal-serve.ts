@@ -209,12 +209,12 @@ function handleStatus(_req: IncomingMessage, res: ServerResponse): void {
   }
 
   // Check role
-  let role = 'standalone';
+  let role = 'core';
   const rolePath = join(paths.state, 'role.json');
   if (existsSync(rolePath)) {
     try {
       const r = JSON.parse(readFileSync(rolePath, 'utf-8'));
-      role = r.role || 'standalone';
+      role = r.role || 'core';
     } catch {}
   }
 

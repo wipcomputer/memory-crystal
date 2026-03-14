@@ -1,18 +1,18 @@
 // memory-crystal/role.ts — Crystal Core/Node role detection and management.
-// Answers: "Am I a Core, a Node, or standalone?"
+// Answers: "Am I a Core or a Node?"
 //
 // Detection logic:
 //   1. State file override (from crystal promote / crystal demote) wins
 //   2. Auto-detect from env vars:
 //      - CRYSTAL_RELAY_URL set + no local embedding provider = node
 //      - CRYSTAL_RELAY_URL set + local embedding provider = core
-//      - No relay URL = standalone
+//      - No relay URL = core (default)
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveStatePath, stateWritePath, ldmPaths, getAgentId, resolveSecretPath } from './ldm.js';
 
-export type CrystalRole = 'core' | 'node' | 'standalone';
+export type CrystalRole = 'core' | 'node';
 
 export interface RoleState {
   role: CrystalRole;
@@ -96,7 +96,7 @@ export function detectRole(): RoleInfo {
   }
 
   // Auto-detect
-  let role: CrystalRole = 'standalone';
+  let role: CrystalRole = 'core';
   if (relayUrl && !localEmbeddings) {
     role = 'node';
   } else if (relayUrl && localEmbeddings) {
