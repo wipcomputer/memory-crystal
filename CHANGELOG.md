@@ -18,6 +18,11 @@
 
 
 
+
+## 0.7.20 (2026-03-14)
+
+Add CLA, dual LICENSE, standardize README footer
+
 ## 0.7.19 (2026-03-14)
 
 Fix score normalization
