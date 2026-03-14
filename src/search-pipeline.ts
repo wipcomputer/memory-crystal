@@ -103,7 +103,7 @@ export async function deepSearch(crystal: Crystal, query: string, options: DeepS
     // Apply recency weighting
     const ageDays = candidate.created_at ? (now - new Date(candidate.created_at).getTime()) / 86400000 : 0;
     const recency = candidate.created_at ? (crystal as any).recencyWeight(ageDays) : 1;
-    const finalScore = Math.min(blendedScore * recency * 8, 1.0);
+    const finalScore = blendedScore * recency;
 
     const freshness = candidate.created_at ? (crystal as any).freshnessLabel(ageDays) : undefined;
 
@@ -114,6 +114,8 @@ export async function deepSearch(crystal: Crystal, query: string, options: DeepS
     } as SearchResult;
   }).filter((r): r is SearchResult => r !== null);
 
-  // Sort by final score and return
-  return blended.sort((a, b) => b.score - a.score).slice(0, limit);
+  // Sort by final score, normalize so top = 0.95 and others relative
+  const sorted = blended.sort((a, b) => b.score - a.score).slice(0, limit);
+  const topScore = sorted[0]?.score || 1;
+  return sorted.map(r => ({ ...r, score: Math.min(r.score / topScore * 0.95, 0.95) }));
 }

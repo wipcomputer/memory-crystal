@@ -17,6 +17,11 @@
 
 
 
+
+## 0.7.19 (2026-03-14)
+
+Fix score normalization
+
 ## 0.7.18 (2026-03-13)
 
 # Dev Update: Orphan Cleanup, DELETE Trigger, Doctor Fix
