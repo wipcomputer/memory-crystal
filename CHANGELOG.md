@@ -19,6 +19,10 @@
 
 
 
+## 0.7.21 (2026-03-14)
+
+Fix install URL
+
 ## 0.7.20 (2026-03-14)
 
 Add CLA, dual LICENSE, standardize README footer

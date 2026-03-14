@@ -19,7 +19,7 @@ You use multiple AIs. They don't talk to each other. They can't search what the 
 Open your AI and say:
 
 ```
-Read wip.computer/install/memory-crystal.txt
+Read wip.computer/install/wip-memory-crystal.txt
 
 Then explain:
 1. What is Memory Crystal?
