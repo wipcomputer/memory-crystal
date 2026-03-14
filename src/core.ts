@@ -782,9 +782,8 @@ export class Crystal {
     const scored = fused.map(r => {
       const ageDays = r.created_at ? (now - new Date(r.created_at).getTime()) / 86400000 : 0;
       const recency = r.created_at ? this.recencyWeight(ageDays) : 1;
-      // RRF scores max at ~0.08. Rescale to match old cosine range (0.3-0.6)
-      // so models treat the results as meaningful. Ranking is unchanged.
-      const rescaled = Math.min(r.score * recency * 8, 1.0);
+      // Apply recency to raw RRF score. Normalization happens after sorting.
+      const rescaled = r.score * recency;
       return {
         ...r,
         score: rescaled,
@@ -792,7 +791,10 @@ export class Crystal {
       };
     });
 
-    return scored.sort((a, b) => b.score - a.score).slice(0, limit);
+    const sorted = scored.sort((a, b) => b.score - a.score).slice(0, limit);
+    // Normalize: top result = 0.95, others relative to it
+    const topScore = sorted[0]?.score || 1;
+    return sorted.map(r => ({ ...r, score: Math.min(r.score / topScore * 0.95, 0.95) }));
   }
 
   /** Deep search: query expansion + LLM re-ranking + position-aware blending.
