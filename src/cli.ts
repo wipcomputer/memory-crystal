@@ -13,7 +13,7 @@ const USAGE = `
 crystal — Sovereign memory system
 
 Commands:
-  crystal search <query> [-n limit] [--agent <id>] [--since <time>] [--deep] [--provider <openai|ollama|google>]
+  crystal search <query> [-n limit] [--agent <id>] [--since <time>] [--intent <context>] [--candidates <n>] [--explain] [--provider <openai|ollama|google>]
   crystal remember <text> [--category fact|preference|event|opinion|skill]
   crystal forget <id>
   crystal status [--provider <openai|ollama|google>]
@@ -32,6 +32,10 @@ Commands:
   crystal backup                              Run a backup now
   crystal backup setup                        Install daily backup (LaunchAgent, 03:00)
   crystal backup --keep <n>                   Keep last n backups (default: 7)
+
+  crystal mlx setup [--yes]                    Install MLX local LLM (Apple Silicon only)
+  crystal mlx status                          Show MLX server status
+  crystal mlx stop                            Stop MLX server
 
   crystal bridge setup                        Install + register Bridge MCP server
   crystal bridge status                       Show Bridge install state
@@ -70,7 +74,7 @@ async function main() {
   const flags: Record<string, string> = {};
   let positional: string[] = [];
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === '--dry-run' || args[i] === '--yes' || args[i] === '-y' || args[i] === '--skip-discover' || args[i] === '--include-secrets' || args[i] === '--deep' || args[i] === '--core' || args[i] === '--node' || args[i] === '--update') {
+    if (args[i] === '--dry-run' || args[i] === '--yes' || args[i] === '-y' || args[i] === '--skip-discover' || args[i] === '--include-secrets' || args[i] === '--deep' || args[i] === '--core' || args[i] === '--node' || args[i] === '--update' || args[i] === '--explain') {
       flags[args[i].replace(/^-+/, '')] = 'true';
     } else if (args[i].startsWith('--') || args[i] === '-n') {
       const key = args[i].replace(/^-+/, '');
@@ -314,6 +318,40 @@ async function main() {
 
   // ── Bridge (no Crystal init needed) ──
 
+  // ── MLX (no Crystal init needed) ──
+
+  if (command === 'mlx') {
+    const subCmd = positional[0] || 'status';
+    const { setupMlx, isServerRunning, stopServer, doctorCheck, MLX_CONFIG } = await import('./mlx-setup.js');
+
+    if (subCmd === 'setup') {
+      const yes = 'yes' in flags || 'y' in flags;
+      const result = await setupMlx({ yes });
+      for (const step of result.steps) {
+        console.log(`  ${result.ok ? '[OK]' : '[!!]'} ${step}`);
+      }
+      if (!result.ok) process.exit(1);
+    } else if (subCmd === 'status') {
+      const check = doctorCheck();
+      const icon = check.status === 'ok' ? '[OK]' : check.status === 'warn' ? '[!!]' : '[XX]';
+      console.log(`MLX LLM: ${icon} ${check.detail}`);
+      if (check.fix) console.log(`  Fix: ${check.fix}`);
+      console.log(`  Port: ${MLX_CONFIG.port}`);
+      console.log(`  Model: ${MLX_CONFIG.model}`);
+      console.log(`  Log: ${MLX_CONFIG.logPath}`);
+    } else if (subCmd === 'stop') {
+      if (stopServer()) {
+        console.log('MLX server stopped.');
+      } else {
+        console.log('MLX server was not running.');
+      }
+    } else {
+      console.error(`Unknown mlx subcommand: ${subCmd}. Use: setup, status, stop`);
+      process.exit(1);
+    }
+    return;
+  }
+
   if (command === 'bridge') {
     const { isBridgeInstalled, isBridgeRegistered, registerBridgeMcp, registerBridgeDesktop, isBridgeDesktopRegistered } = await import('./bridge.js');
     const subCmd = positional[0] || 'status';
@@ -399,7 +437,10 @@ async function main() {
         const filter: any = {};
         if (flags.agent) filter.agent_id = flags.agent;
         if (flags.since) filter.since = flags.since;
-        const results = await crystal.deepSearch(query, limit, filter);
+        const intent = flags.intent as string | undefined;
+        const candidateLimit = flags.candidates ? parseInt(flags.candidates, 10) : undefined;
+        const explainMode = 'explain' in flags;
+        const results = await crystal.deepSearch(query, limit, filter, { intent, candidateLimit, explain: explainMode });
         if (results.length === 0) {
           console.log('No results found.');
         } else {
@@ -411,6 +452,10 @@ async function main() {
             const fresh = r.freshness ? `${icon[r.freshness]} ${r.freshness}, ` : '';
             console.log(`[${i + 1}] (${fresh}${score}% match, ${r.agent_id}, ${date}, ${r.role})`);
             console.log(r.text.slice(0, 300) + (r.text.length > 300 ? '...' : ''));
+            if (explainMode && (r as any).explain) {
+              const e = (r as any).explain;
+              console.log(`  explain: fts=${e.fts_score?.toFixed(3) || 'n/a'} vec=${e.vec_score?.toFixed(3) || 'n/a'} rrf_rank=${e.rrf_rank} rerank=${e.rerank_score.toFixed(3)} recency=${e.recency_weight.toFixed(3)} final=${e.final_score.toFixed(4)}`);
+            }
             console.log('---');
           }
         }

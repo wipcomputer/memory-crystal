@@ -88,6 +88,12 @@ export interface SearchResult {
   freshness?: "fresh" | "recent" | "aging" | "stale";
 }
 
+/** Pre-expanded query for unified search API. Skip LLM expansion when you know what you want. */
+export interface StructuredQuery {
+  type: 'lex' | 'vec' | 'hyde';
+  text: string;
+}
+
 export interface CrystalStatus {
   chunks: number;
   memories: number;
@@ -348,6 +354,21 @@ export class Crystal {
       CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
       CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id);
       CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id);
+
+      -- LLM cache (persistent expansion + reranking results)
+      CREATE TABLE IF NOT EXISTS llm_cache (
+        cache_key TEXT PRIMARY KEY,
+        cache_type TEXT NOT NULL,
+        query TEXT NOT NULL,
+        intent TEXT,
+        result TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        hit_count INTEGER DEFAULT 0,
+        last_hit_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_llm_cache_type ON llm_cache(cache_type);
+      CREATE INDEX IF NOT EXISTS idx_llm_cache_created ON llm_cache(created_at);
 
       -- Source file indexing (optional feature)
       CREATE TABLE IF NOT EXISTS source_collections (
@@ -798,10 +819,46 @@ export class Crystal {
   }
 
   /** Deep search: query expansion + LLM re-ranking + position-aware blending.
-   *  Falls back to standard search if no LLM provider is available. */
-  async deepSearch(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string }): Promise<SearchResult[]> {
+   *  Falls back to standard search if no LLM provider is available.
+   *  Supports intent disambiguation, candidateLimit tuning, and explain traces. */
+  async deepSearch(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string }, options?: { intent?: string; candidateLimit?: number; explain?: boolean }): Promise<SearchResult[]> {
     const { deepSearch: deepSearchFn } = await import('./search-pipeline.js');
-    return deepSearchFn(this, query, { limit, filter });
+    return deepSearchFn(this, query, { limit, filter, ...options });
+  }
+
+  /** Structured search: pass pre-expanded queries to skip LLM expansion.
+   *  Each query is typed (lex, vec, hyde) and searched independently, then fused with RRF. */
+  async structuredSearch(queries: StructuredQuery[], limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string }): Promise<SearchResult[]> {
+    const db = this.sqliteDb!;
+    const sinceDate = filter?.since ? this.parseSince(filter.since) : undefined;
+    const internalFilter = { ...filter, sinceDate };
+    const allResultLists: SearchResult[][] = [];
+
+    for (const q of queries) {
+      if (q.type === 'lex') {
+        const fts = this.searchFTS(q.text, Math.max(limit * 5, 50), internalFilter);
+        if (fts.length > 0) allResultLists.push(fts);
+      } else {
+        const [embedding] = await this.embed([q.text]);
+        const vec = this.searchVec(embedding, Math.max(limit * 5, 50), internalFilter);
+        if (vec.length > 0) allResultLists.push(vec);
+      }
+    }
+
+    // First list gets 2x weight (put your strongest signal first)
+    const weights = allResultLists.map((_, i) => i === 0 ? 2.0 : 1.0);
+    const fused = this.reciprocalRankFusion(allResultLists, weights);
+
+    const now = Date.now();
+    const scored = fused.map(r => {
+      const ageDays = r.created_at ? (now - new Date(r.created_at).getTime()) / 86400000 : 0;
+      const recency = r.created_at ? this.recencyWeight(ageDays) : 1;
+      return { ...r, score: r.score * recency, freshness: r.created_at ? this.freshnessLabel(ageDays) : undefined };
+    });
+
+    const sorted = scored.sort((a, b) => b.score - a.score).slice(0, limit);
+    const topScore = sorted[0]?.score || 1;
+    return sorted.map(r => ({ ...r, score: Math.min(r.score / topScore * 0.95, 0.95) }));
   }
 
   /** Vector search via sqlite-vec. Two-step pattern: MATCH first, then JOIN. */
