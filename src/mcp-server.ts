@@ -64,6 +64,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           agent_id: { type: 'string', description: 'Filter by agent (e.g. "main", "claude-code")' },
           time_filter: { type: 'string', description: 'Only return results newer than this. Relative ("24h", "7d", "30d") or ISO date.' },
           quality: { type: 'string', enum: ['fast', 'deep'], description: 'Search quality mode. "fast" (default) uses hybrid search. "deep" adds LLM query expansion + re-ranking.' },
+          intent: { type: 'string', description: 'Disambiguate the query without adding search terms. E.g. query "security" + intent "1Password automation" steers toward 1Password results.' },
+          candidate_limit: { type: 'number', description: 'Number of candidates for LLM re-ranking (default: 40). More = better recall, slower.' },
+          explain: { type: 'boolean', description: 'Return per-result scoring breakdown (FTS, vector, RRF, rerank, recency scores).' },
         },
         required: ['query'],
       },
@@ -146,6 +149,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     await crystal.init();
 
+    // Wire persistent LLM cache to the crystal database
+    if (!isRemote && (crystal as any).sqliteDb) {
+      const { setLLMCacheDb } = await import('./llm.js');
+      setLLMCacheDb((crystal as any).sqliteDb);
+    }
+
     switch (name) {
       case 'crystal_search': {
         const query = args?.query as string;
@@ -153,9 +162,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const filter: any = {};
         if (args?.agent_id) filter.agent_id = args.agent_id;
         if (args?.time_filter) filter.since = args.time_filter;
+        const intent = args?.intent as string | undefined;
+        const candidateLimit = args?.candidate_limit as number | undefined;
+        const explain = args?.explain as boolean | undefined;
         const results = isRemote
           ? await crystal.search(query, limit, filter)
-          : await (crystal as Crystal).deepSearch(query, limit, filter);
+          : await (crystal as Crystal).deepSearch(query, limit, filter, { intent, candidateLimit, explain });
         logSearchMetric('crystal_search', query, results.length);
 
         if (results.length === 0) {

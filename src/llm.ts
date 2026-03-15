@@ -54,8 +54,39 @@ export function hasSampling(): boolean {
   return samplingServer !== null;
 }
 
-// Cache for expanded queries (same query = same expansions within a session)
+// Cache for expanded queries (in-memory fallback, persistent DB cache preferred)
 const expansionCache = new Map<string, QueryVariation[]>();
+
+// Persistent cache via crystal.db (set by caller)
+let _cacheDb: any = null;
+const CACHE_TTL_DAYS = parseInt(process.env.CRYSTAL_CACHE_TTL_DAYS || '7', 10);
+
+/** Set the database handle for persistent LLM caching. Called by mcp-server/cli. */
+export function setLLMCacheDb(db: any): void { _cacheDb = db; }
+
+function dbCacheGet(key: string): string | null {
+  if (!_cacheDb) return null;
+  try {
+    const row = _cacheDb.prepare(
+      'SELECT result FROM llm_cache WHERE cache_key = ? AND created_at > ?'
+    ).get(key, new Date(Date.now() - CACHE_TTL_DAYS * 86400000).toISOString()) as any;
+    if (row) {
+      _cacheDb.prepare('UPDATE llm_cache SET hit_count = hit_count + 1, last_hit_at = ? WHERE cache_key = ?')
+        .run(new Date().toISOString(), key);
+      return row.result;
+    }
+  } catch {}
+  return null;
+}
+
+function dbCacheSet(key: string, type: string, query: string, intent: string | undefined, result: string, provider: string): void {
+  if (!_cacheDb) return;
+  try {
+    _cacheDb.prepare(
+      'INSERT OR REPLACE INTO llm_cache (cache_key, cache_type, query, intent, result, provider, created_at, hit_count, last_hit_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL)'
+    ).run(key, type, query, intent || null, result, provider, new Date().toISOString());
+  } catch {}
+}
 
 let detectedProvider: ProviderConfig | null = null;
 let detectionDone = false;
@@ -88,13 +119,13 @@ export async function detectProvider(): Promise<ProviderConfig> {
     return detectedProvider;
   }
 
-  // 1. MLX server (localhost:8080)
+  // 1. MLX server (localhost:18791)
   try {
-    const resp = await fetch('http://localhost:8080/v1/models', { signal: AbortSignal.timeout(1000) });
+    const resp = await fetch('http://localhost:18791/v1/models', { signal: AbortSignal.timeout(1000) });
     if (resp.ok) {
       const data = await resp.json() as any;
       const model = data?.data?.[0]?.id || 'default';
-      detectedProvider = { provider: 'mlx', baseURL: 'http://localhost:8080/v1', apiKey: 'not-needed', model };
+      detectedProvider = { provider: 'mlx', baseURL: 'http://localhost:18791/v1', apiKey: 'not-needed', model };
       process.stderr.write(`[memory-crystal] LLM provider: MLX (${model})\n`);
       return detectedProvider;
     }
@@ -243,17 +274,24 @@ Rules:
 - vec should rephrase the intent naturally
 - hyde should be a short passage as if answering the query`;
 
-export async function expandQuery(query: string): Promise<QueryVariation[]> {
-  // Check cache
-  const cached = expansionCache.get(query);
+export async function expandQuery(query: string, intent?: string): Promise<QueryVariation[]> {
+  // Check persistent DB cache first, then in-memory
+  const cacheKey = intent ? `expand:${query}||${intent}` : `expand:${query}`;
+  const dbCached = dbCacheGet(cacheKey);
+  if (dbCached) {
+    try { return JSON.parse(dbCached); } catch {}
+  }
+  const cached = expansionCache.get(cacheKey);
   if (cached) return cached;
 
   const config = await detectProvider();
   if (config.provider === 'none') return [];
 
   try {
+    // Add intent context to the prompt when provided
+    const intentContext = intent ? `\nQuery intent: ${intent}. Use this to guide your variations toward the intended domain.` : '';
     const result = await chatComplete(config, [
-      { role: 'system', content: EXPAND_PROMPT },
+      { role: 'system', content: EXPAND_PROMPT + intentContext },
       { role: 'user', content: query },
     ], 300);
 
@@ -278,7 +316,8 @@ export async function expandQuery(query: string): Promise<QueryVariation[]> {
     }).filter((v): v is QueryVariation => v !== null);
 
     if (variations.length > 0) {
-      expansionCache.set(query, variations);
+      expansionCache.set(cacheKey, variations);
+      dbCacheSet(cacheKey, 'expansion', query, intent, JSON.stringify(variations), config.provider);
       return variations;
     }
   } catch (err) {
@@ -316,6 +355,15 @@ export async function rerankResults(query: string, passages: string[]): Promise<
     return passages.map((_, i) => ({ index: i, score: 1.0 - i * 0.01 }));
   }
 
+  // Check persistent rerank cache (key by query + content hashes)
+  const { createHash } = await import('node:crypto');
+  const contentHash = createHash('sha256').update(passages.map(p => p.slice(0, 200)).sort().join('|')).digest('hex').slice(0, 16);
+  const rerankCacheKey = `rerank:${query}||${contentHash}`;
+  const dbCachedRerank = dbCacheGet(rerankCacheKey);
+  if (dbCachedRerank) {
+    try { return JSON.parse(dbCachedRerank); } catch {}
+  }
+
   try {
     const passageList = passages.map((p, i) => `[${i}] ${p.slice(0, 500)}`).join('\n\n');
     const result = await chatComplete(config, [
@@ -337,7 +385,9 @@ export async function rerankResults(query: string, passages: string[]): Promise<
       if (!scored.has(i)) results.push({ index: i, score: 0.0 });
     }
 
-    return results.sort((a, b) => b.score - a.score);
+    const sorted = results.sort((a, b) => b.score - a.score);
+    dbCacheSet(rerankCacheKey, 'rerank', query, undefined, JSON.stringify(sorted), config.provider);
+    return sorted;
   } catch (err) {
     process.stderr.write(`[memory-crystal] Reranking failed: ${(err as Error).message}\n`);
     return passages.map((_, i) => ({ index: i, score: 1.0 - i * 0.01 }));

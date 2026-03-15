@@ -64,6 +64,15 @@ export async function runDoctor(): Promise<DoctorCheck[]> {
   // 12. Private mode
   checks.push(checkPrivateMode());
 
+  // 13. MLX local LLM
+  try {
+    const { doctorCheck } = await import('./mlx-setup.js');
+    const mlx = doctorCheck();
+    if (mlx.status !== 'skip') {
+      checks.push({ name: 'MLX LLM', status: mlx.status, detail: mlx.detail, fix: mlx.fix });
+    }
+  } catch {}
+
   return checks;
 }
 

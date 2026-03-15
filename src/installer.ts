@@ -816,6 +816,20 @@ export async function runInstallOrUpdate(options: {
     steps.push(`Backup script failed: ${err.message}`);
   }
 
+  // Step 6b: MLX local LLM (Apple Silicon only)
+  try {
+    const { canRunMlx, isMlxLmInstalled, isServerRunning } = await import('./mlx-setup.js');
+    if (canRunMlx()) {
+      if (isServerRunning()) {
+        steps.push('MLX LLM: already running');
+      } else if (isMlxLmInstalled()) {
+        steps.push('MLX LLM: installed but not running. Start with: launchctl kickstart -kp gui/$(id -u)/ai.ldm.mlx-server');
+      } else {
+        steps.push('MLX LLM: Apple Silicon detected. Run "crystal mlx setup" to install local LLM for free, fast, offline search quality.');
+      }
+    }
+  } catch {}
+
   // Step 7: OpenClaw (if detected, skip if ldm CLI handled it)
   if (!ldmDelegated && state.ocDetected) {
     try {
