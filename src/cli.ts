@@ -68,6 +68,20 @@ async function main() {
     process.exit(0);
   }
 
+  if (args[0] === '--version' || args[0] === '-v') {
+    try {
+      const { readFileSync } = await import('node:fs');
+      const { dirname, join } = await import('node:path');
+      const { fileURLToPath } = await import('node:url');
+      const thisDir = dirname(fileURLToPath(import.meta.url));
+      const pkg = JSON.parse(readFileSync(join(thisDir, '..', 'package.json'), 'utf-8'));
+      console.log(pkg.version);
+    } catch {
+      console.log('unknown');
+    }
+    process.exit(0);
+  }
+
   const command = args[0];
 
   // Parse flags
