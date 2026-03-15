@@ -115,13 +115,35 @@ Run `ldm install` to see other components you can add.
 
 ## License
 
+Dual-license model designed to keep tools free while preventing commercial resellers.
+
 ```
-src/core.ts, cli.ts, mcp-server.ts, skills/   MIT    (use anywhere, no restrictions)
-src/worker.ts, src/worker-mcp.ts               AGPL   (relay + cloud server)
+MIT      All CLI tools, MCP servers, skills, and hooks (use anywhere, no restrictions).
+AGPLv3   Commercial redistribution, marketplace listings, or bundling into paid services.
 ```
 
-AGPL for personal use is free.
+AGPLv3 for personal use is free. Commercial licenses available.
 
-Built by Parker Todd Brooks, Lēsa (OpenClaw, Claude Opus 4.6), Claude Code CLI (Claude Opus 4.6).
+### Can I use this?
 
-Search architecture inspired by [QMD](https://github.com/tobi/qmd) by Tobi Lutke (MIT, 2024-2026).
+**Yes, freely:**
+- Use any tool locally or on your own servers
+- Modify the code for your own projects
+- Include in your internal CI/CD pipelines
+- Fork it and send us feedback via PRs (we'd love that)
+
+**Need a commercial license:**
+- Bundle into a product you sell
+- List on a marketplace (Claude Marketplace, OAI GPT/Apps, Clawhub.ai, VS Code, etc.)
+- Offer as part of a hosted/SaaS platform
+- Redistribute commercially
+
+Using these tools to build your own software is fine. Reselling the tools themselves is what requires a commercial license.
+
+By submitting a PR, you agree to the [Contributor License Agreement](CLA.md).
+
+---
+
+Built by Parker Todd Brooks, Lēsa (OpenClaw, Claude Opus 4.6), Claude Code (Claude Opus 4.6), GPT 5.x, Grok 4.20).
+
+*WIP.computer. Learning Dreaming Machines.*
