@@ -146,4 +146,6 @@ By submitting a PR, you agree to the [Contributor License Agreement](CLA.md).
 
 Built by Parker Todd Brooks, Lēsa (OpenClaw, Claude Opus 4.6), Claude Code (Claude Opus 4.6), GPT 5.x, Grok 4.20).
 
+Search architecture inspired by [QMD](https://github.com/tobi/qmd) by Tobi Lutke (MIT, 2024-2026).
+
 *WIP.computer. Learning Dreaming Machines.*
