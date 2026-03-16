@@ -1,7 +1,11 @@
 {
   "name": "@wipcomputer/memory-crystal",
-  "version": "0.7.25",
+  "version": "0.7.26",
   "description": "Sovereign memory system — local-first with ephemeral encrypted relay. Your memory, your machine, your rules.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wipcomputer/memory-crystal.git"
+  },
   "type": "module",
   "main": "dist/core.js",
   "openclaw": {

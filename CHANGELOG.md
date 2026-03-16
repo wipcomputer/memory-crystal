@@ -19,6 +19,16 @@
 
 
 
+## 0.7.26 (2026-03-16)
+
+# Memory Crystal v0.7.26
+
+Add repository field to package.json. GitHub Packages needs this to link packages to the repo.
+
+## Issues closed
+
+- Closes #50
+
 ## 0.7.25 (2026-03-16)
 
 # Release Notes: memory-crystal v0.7.25
