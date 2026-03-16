@@ -1,7 +1,7 @@
 ---
-name: memory
+name: wip-memory-crystal
 description: Search and manage the shared memory crystal. Use when user says "do you remember", "search memory", "remember this", "forget that", "memory status", "what do you know about", or needs to recall past discussions, store facts, or check what's in memory.
-version: 0.4.0
+version: 0.7.24
 ---
 
 # Memory Crystal
