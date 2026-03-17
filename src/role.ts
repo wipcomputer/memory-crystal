@@ -97,9 +97,9 @@ export function detectRole(): RoleInfo {
 
   // Auto-detect
   let role: CrystalRole = 'core';
-  if (relayUrl && !localEmbeddings) {
+  if ((relayUrl || relayKeyExists) && !localEmbeddings) {
     role = 'node';
-  } else if (relayUrl && localEmbeddings) {
+  } else if ((relayUrl || relayKeyExists) && localEmbeddings) {
     role = 'core';
   }
 
