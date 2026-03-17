@@ -855,7 +855,28 @@ export async function runInstallOrUpdate(options: {
     }
   }
 
-  // Step 8: Role setup
+  // Step 8: Interactive role selection (if no flags provided)
+  if (!options.role && process.stdin.isTTY) {
+    const { createInterface } = await import('readline');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise<string>(resolve => {
+      rl.question('\n  Is this your primary machine (always on), or adding a device?\n  [1] Primary (Crystal Core)\n  [2] Adding a device (Crystal Node)\n  > ', resolve);
+    });
+    rl.close();
+    if (answer.trim() === '2') {
+      options.role = 'node';
+      // Prompt for pairing code
+      const rl2 = createInterface({ input: process.stdin, output: process.stdout });
+      options.pairCode = await new Promise<string>(resolve => {
+        rl2.question('  Pairing code from Core (run "crystal pair" on Core): ', resolve);
+      });
+      rl2.close();
+    } else {
+      options.role = 'core';
+    }
+  }
+
+  // Step 8b: Role setup
   if (options.role === 'core') {
     try {
       const { promoteToCore } = await import('./role.js');
@@ -882,6 +903,72 @@ export async function runInstallOrUpdate(options: {
       steps.push('Pairing code accepted');
     } catch (err: any) {
       steps.push(`Pairing failed: ${err.message}`);
+    }
+  }
+
+  // Step 10: Relay configuration (for Node or Core with relay)
+  if (options.role === 'node' || process.env.CRYSTAL_RELAY_URL) {
+    const secretsDir = join(LDM_ROOT, 'secrets');
+    const envPath = join(secretsDir, 'crystal-relay.env');
+
+    if (!existsSync(envPath)) {
+      const relayUrl = 'https://memory-crystal-relay.wipcomputer.workers.dev';
+      let token = '';
+
+      // Try 1Password first
+      try {
+        const saTokenPath = join(OC_ROOT, 'secrets', 'op-sa-token');
+        if (existsSync(saTokenPath)) {
+          const saToken = readFileSync(saTokenPath, 'utf8').trim();
+          token = execSync(
+            `OP_SERVICE_ACCOUNT_TOKEN=${saToken} op item get "Memory Crystal Relay Auth Tokens" --vault "Agent Secrets" --fields label=${agentId}-token --reveal 2>/dev/null`,
+            { encoding: 'utf8', timeout: 15000 }
+          ).trim();
+        }
+      } catch {}
+
+      // If no 1Password, prompt
+      if (!token && process.stdin.isTTY) {
+        const { createInterface } = await import('readline');
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        token = await new Promise<string>(resolve => {
+          rl.question('  Relay auth token: ', resolve);
+        });
+        rl.close();
+        token = token.trim();
+      }
+
+      if (token) {
+        mkdirSync(secretsDir, { recursive: true });
+        writeFileSync(envPath, `export CRYSTAL_RELAY_URL=${relayUrl}\nexport CRYSTAL_RELAY_TOKEN=${token}\nexport CRYSTAL_AGENT_ID=${agentId}\n`);
+        process.env.CRYSTAL_RELAY_URL = relayUrl;
+        process.env.CRYSTAL_RELAY_TOKEN = token;
+        steps.push('Relay config written to ~/.ldm/secrets/crystal-relay.env');
+
+        // Offer to add to shell profile
+        const shellProfile = join(HOME, '.zshrc');
+        const sourceLine = `source ${envPath}`;
+        let alreadySourced = false;
+        try { alreadySourced = readFileSync(shellProfile, 'utf8').includes(sourceLine); } catch {}
+
+        if (!alreadySourced && process.stdin.isTTY) {
+          const { createInterface: createRL } = await import('readline');
+          const rl2 = createRL({ input: process.stdin, output: process.stdout });
+          const ans = await new Promise<string>(resolve => {
+            rl2.question('  Add relay config to ~/.zshrc? [Y/n] ', resolve);
+          });
+          rl2.close();
+          if (ans.trim().toLowerCase() !== 'n') {
+            const { appendFileSync } = await import('fs');
+            appendFileSync(shellProfile, `\n# Memory Crystal relay\n${sourceLine}\n`);
+            steps.push('Added relay source to ~/.zshrc');
+          }
+        }
+      } else {
+        steps.push('No relay token. Set CRYSTAL_RELAY_TOKEN manually.');
+      }
+    } else {
+      steps.push('Relay config exists at ~/.ldm/secrets/crystal-relay.env');
     }
   }
 
