@@ -4,7 +4,7 @@
   "description": "Sovereign memory system — local-first with ephemeral encrypted relay. Your memory, your machine, your rules.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wipcomputer/memory-crystal-private.git"
+    "url": "git+https://github.com/wipcomputer/memory-crystal.git"
   },
   "type": "module",
   "main": "dist/core.js",
@@ -36,7 +36,7 @@
     "cloud:db:migrate:remote": "cd cloud && npx wrangler d1 migrations apply memory-crystal-cloud --remote"
   },
   "dependencies": {
-    "dream-weaver-protocol": "file:../dream-weaver-protocol-private",
+    "dream-weaver-protocol": "file:../dream-weaver-protocol",
     "@lancedb/lancedb": "^0.15.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "agents": "^0.7.2",
