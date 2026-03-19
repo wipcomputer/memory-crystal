@@ -185,7 +185,7 @@ export function deployCaptureScript(): string {
 // ── Cron management ──
 
 const CRON_TAG = '# crystal-capture';
-const CRON_ENTRY = '* * * * * ~/.ldm/bin/crystal-capture.sh >> /tmp/ldm-dev-tools/crystal-capture.log 2>&1';
+const CRON_ENTRY = '* * * * * ~/.ldm/bin/crystal-capture.sh >> ~/.ldm/logs/crystal-capture.log 2>&1';
 
 /** Test if a crontab line belongs to crystal-capture (our tag or our entry). */
 function isCrystalCaptureLine(line: string): boolean {
@@ -195,7 +195,7 @@ function isCrystalCaptureLine(line: string): boolean {
 /** Install the crystal-capture cron entry. Idempotent: replaces existing entry if present. */
 export function installCron(): void {
   // Ensure log directory exists
-  mkdirSync('/tmp/ldm-dev-tools', { recursive: true });
+  mkdirSync(join(HOME, '.ldm', 'logs'), { recursive: true });
 
   let existing = '';
   try {
@@ -283,9 +283,9 @@ export function installBackupLaunchAgent(): string {
     <integer>0</integer>
   </dict>
   <key>StandardOutPath</key>
-  <string>/tmp/ldm-dev-tools/ldm-backup.log</string>
+  <string>${HOME}/.ldm/logs/ldm-backup.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/ldm-dev-tools/ldm-backup.log</string>
+  <string>${HOME}/.ldm/logs/ldm-backup.log</string>
 </dict>
 </plist>`;
 
