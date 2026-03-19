@@ -19,6 +19,33 @@
 
 
 
+## 0.7.28 (2026-03-18)
+
+# Release Notes: memory-crystal v0.7.28
+
+**One-line summary of what this release does**
+
+## What changed
+
+Describe the changes. Not a commit list. Explain:
+- What was built or fixed
+- Why it matters
+- What the user should know
+
+## Why
+
+What problem does this solve? What was broken or missing?
+
+## Issues closed
+
+- #91
+
+## How to verify
+
+```bash
+# Commands to test the changes
+```
+
 ## 0.7.27 (2026-03-17)
 
 # Add root SKILL.md + ldm install as primary path

@@ -181,7 +181,7 @@ async function main() {
         console.log('Backup LaunchAgent installed.');
         console.log(`  Runs daily at 03:00`);
         console.log(`  Plist: ${plistPath}`);
-        console.log(`  Log: /tmp/ldm-dev-tools/ldm-backup.log`);
+        console.log(`  Log: ~/.ldm/logs/ldm-backup.log`);
       } catch (err: any) {
         console.error(`Setup failed: ${err.message}`);
         process.exit(1);
