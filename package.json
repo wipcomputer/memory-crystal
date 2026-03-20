@@ -1,6 +1,6 @@
 {
   "name": "@wipcomputer/memory-crystal",
-  "version": "0.7.28",
+  "version": "0.7.29",
   "description": "Sovereign memory system — local-first with ephemeral encrypted relay. Your memory, your machine, your rules.",
   "repository": {
     "type": "git",

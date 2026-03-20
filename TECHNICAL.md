@@ -44,7 +44,7 @@ crystal init                    # Scaffolds ~/.ldm/, deploys capture script, ins
 
 This copies `crystal-capture.sh` to `~/.ldm/bin/` and installs a cron entry:
 ```
-* * * * * ~/.ldm/bin/crystal-capture.sh >> /tmp/ldm-dev-tools/crystal-capture.log 2>&1
+* * * * * ~/.ldm/bin/crystal-capture.sh >> ~/.ldm/logs/crystal-capture.log 2>&1
 ```
 
 The script calls `node ~/.ldm/extensions/memory-crystal/dist/cc-poller.js`. The poller fetches the OpenAI API key internally via `opRead()` (1Password SA token). No secrets in the shell script.
@@ -215,6 +215,24 @@ Provider detection in `llm.ts`:
 
 Search can be filtered by time: `--since 24h`, `--since 7d`, `--since 30d`, or an ISO date. Applied as a SQL WHERE clause before search. Available on CLI and MCP (`time_filter` parameter).
 
+### Intent Parameter
+
+`--intent <description>` disambiguates queries without adding search terms. Example: `crystal search "security" --intent "1Password"` steers toward 1Password-specific context, not repo permissions or agent secrets.
+
+Intent flows through: expansion prompt (guides LLM variations), disables strong-signal bypass, prepended to rerank query for LLM relevance scoring.
+
+### Explain Mode
+
+`--explain` shows per-result scoring breakdown: FTS (keyword) score, vector (semantic) score, RRF rank after fusion, reranker score from LLM, recency weight, final blended score. Makes search quality transparent and debuggable.
+
+### Candidate Limit
+
+`--candidates N` tunes the rerank pool size (default 40). Higher values give the LLM more results to evaluate. Lower values are faster.
+
+### LLM Cache
+
+Expansion + reranking results cached in `llm_cache` table with 7-day TTL. Same query returns instantly on second search. Cache is per-query, per-intent.
+
 ### Recency Decay
 
 Exponential decay from 1.0 to floor 0.3. Day 0: 1.0, Day 1: 0.90, Day 3: 0.74, Day 7: 0.50, Day 14+: 0.3 (floor). Fresh context wins decisively. Old content still surfaces for strong matches but doesn't bury recent results.
@@ -274,6 +292,9 @@ Memory Crystal manages `~/.ldm/` ... the universal agent home directory for [LDM
   config.json                              version, registered agents array
   bin/
     crystal-capture.sh                     cron job script (deployed by crystal init)
+  logs/
+    crystal-capture.log                    cron output (persists across reboots)
+    ldm-backup.log                         backup script output
   memory/
     crystal.db                             shared vector DB (all agents)
   extensions/
@@ -419,7 +440,9 @@ Incremental sync detects changed files via SHA-256 content hashing. Only re-embe
 
 ```bash
 # Search
-crystal search <query> [-n limit] [--agent <id>] [--since <24h|7d|30d>] [--provider <openai|ollama|google>]
+crystal search <query> [-n limit] [--agent <id>] [--since <24h|7d|30d>]
+  [--intent <description>] [--candidates N] [--explain]
+  [--provider <openai|ollama|google>]
 
 # Remember / forget
 crystal remember <text> [--category fact|preference|event|opinion|skill]
@@ -427,6 +450,11 @@ crystal forget <id>
 
 # Status
 crystal status [--provider <openai|ollama|google>]
+
+# MLX local LLM (Apple Silicon)
+crystal mlx setup                # auto-install Qwen2.5-3B, create LaunchAgent
+crystal mlx status               # check server health
+crystal mlx stop                 # stop the server
 
 # Source file indexing
 crystal sources add <path> --name <name>

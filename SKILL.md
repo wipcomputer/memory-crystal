@@ -1,7 +1,7 @@
 ---
 name: wip-memory-crystal
 description: Search and manage the shared memory crystal. Use when user says "do you remember", "search memory", "remember this", "forget that", "memory status", "what do you know about", or needs to recall past discussions, store facts, or check what's in memory.
-version: "0.7.28"
+version: "0.7.29"
 ---
 
 # Memory Crystal
@@ -140,7 +140,13 @@ If that returns a key, skip to Step 3.
 
 If not, ask the user which provider they want:
 
-**Option A: OpenAI (recommended, requires API key)**
+**Option A: MLX (free, local, Apple Silicon only)**
+```bash
+crystal mlx setup
+```
+Auto-installs Qwen2.5-3B on M-series Macs. Creates a LaunchAgent on port 18791. `crystal init` detects MLX automatically.
+
+**Option B: OpenAI (recommended for non-Apple Silicon, requires API key)**
 Tell the user to add this to their shell profile (`~/.zshrc` or `~/.bashrc`):
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -365,7 +371,7 @@ This machine is now a Crystal Node. Conversations are captured, encrypted, and r
 
 ## Role Management
 
-Users can check and change roles at any time:
+Two-role architecture: **Core** (master database, embedding server, relay sync) and **Node** (mirrors Core, syncs via relay, local search). Users can check and change roles at any time:
 
 ```bash
 crystal role              # Show current role
@@ -404,7 +410,11 @@ Search across all stored memory. Semantic search with recency-weighted results.
 ```
 crystal_search query="how do plugins work" limit=5
 crystal_search query="user preferences" agent_id="main"
+crystal_search query="security" intent="1Password"
+crystal_search query="deployment" time_filter="7d" explain=true
 ```
+
+Parameters: `query` (required), `limit`, `agent_id`, `time_filter` (24h/7d/30d), `intent` (disambiguate without adding search terms), `candidates` (rerank pool size), `explain` (show scoring breakdown).
 
 Results are ranked by relevance and freshness, with color-coded freshness indicators:
 - fresh (less than 3 days)
