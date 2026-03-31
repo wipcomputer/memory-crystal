@@ -8,9 +8,21 @@ import { join, basename } from 'node:path';
 import { resolveStatePath, stateWritePath } from './ldm.js';
 
 const HOME = process.env.HOME || '';
-const STAFF_DIR = join(HOME, 'Documents', 'wipcomputer--mac-mini-01', 'staff');
-const CC_REPOS = join(STAFF_DIR, 'Parker', 'Claude Code - Mini', 'repos');
-const LESA_REPOS = join(STAFF_DIR, 'Lēsa', 'repos');
+
+function resolveWorkspace(): string {
+  const configPath = join(HOME, '.ldm', 'config.json');
+  if (existsSync(configPath)) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (config.workspace) return config.workspace;
+    } catch {}
+  }
+  return join(HOME, 'wipcomputerinc');
+}
+
+const TEAM_DIR = join(resolveWorkspace(), 'team');
+const CC_REPOS = join(TEAM_DIR, 'cc-mini', 'repos');
+const LESA_REPOS = join(TEAM_DIR, 'Lēsa', 'repos');
 const DEV_UPDATES_DIR = join(CC_REPOS, 'wip-dev-updates'); // Legacy, kept for fallback
 const LAST_RUN_PATH = resolveStatePath('dev-update-last-run.json');
 

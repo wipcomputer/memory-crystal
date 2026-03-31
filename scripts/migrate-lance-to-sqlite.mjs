@@ -14,6 +14,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 
 const BATCH_SIZE = 500;
 
@@ -23,7 +24,7 @@ async function main() {
   const batchSizeArg = args.find((_, i) => args[i - 1] === '--batch-size');
   const batchSize = batchSizeArg ? parseInt(batchSizeArg) : BATCH_SIZE;
 
-  const openclawHome = process.env.OPENCLAW_HOME || join(process.env.HOME || '/Users/lesa', '.openclaw');
+  const openclawHome = process.env.OPENCLAW_HOME || join(process.env.HOME || homedir(), '.openclaw');
   const dataDir = join(openclawHome, 'memory-crystal');
   const lanceDir = join(dataDir, 'lance');
   const sqlitePath = join(dataDir, 'crystal.db');

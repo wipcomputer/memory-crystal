@@ -14,7 +14,7 @@ export interface DeepSearchOptions {
   limit?: number;
   candidateLimit?: number;
   intent?: string;
-  filter?: { agent_id?: string; source_type?: string; since?: string };
+  filter?: { agent_id?: string; source_type?: string; since?: string; until?: string };
   explain?: boolean;
 }
 
@@ -55,7 +55,8 @@ export async function deepSearch(crystal: Crystal, query: string, options: DeepS
   if (!db) return crystal.search(query, limit, filter);
 
   const sinceDate = filter?.since ? (crystal as any).parseSince(filter.since) : undefined;
-  const internalFilter = { ...filter, sinceDate };
+  const untilDate = filter?.until ? (crystal as any).parseSince(filter.until) : undefined;
+  const internalFilter = { ...filter, sinceDate, untilDate };
 
   // Step 1: BM25 probe for strong signal detection
   const initialFts = (crystal as any).searchFTS(query, 20, internalFilter) as SearchResult[];
