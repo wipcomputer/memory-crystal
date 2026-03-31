@@ -13,7 +13,7 @@ const USAGE = `
 crystal — Sovereign memory system
 
 Commands:
-  crystal search <query> [-n limit] [--agent <id>] [--since <time>] [--intent <context>] [--candidates <n>] [--explain] [--provider <openai|ollama|google>]
+  crystal search <query> [-n limit] [--agent <id>] [--since <time>] [--until <date>] [--intent <context>] [--candidates <n>] [--explain] [--provider <openai|ollama|google>]
   crystal remember <text> [--category fact|preference|event|opinion|skill]
   crystal forget <id>
   crystal status [--provider <openai|ollama|google>]
@@ -451,6 +451,7 @@ async function main() {
         const filter: any = {};
         if (flags.agent) filter.agent_id = flags.agent;
         if (flags.since) filter.since = flags.since;
+        if (flags.until) filter.until = flags.until;
         const intent = flags.intent as string | undefined;
         const candidateLimit = flags.candidates ? parseInt(flags.candidates, 10) : undefined;
         const explainMode = 'explain' in flags;

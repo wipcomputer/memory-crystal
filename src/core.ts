@@ -771,7 +771,7 @@ export class Crystal {
 
   // ── Search (Hybrid: BM25 + Vector + RRF fusion + Recency) ──
 
-  async search(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string }): Promise<SearchResult[]> {
+  async search(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string; until?: string }): Promise<SearchResult[]> {
     const db = this.sqliteDb!;
 
     // Check if sqlite-vec has been populated (migration complete)
@@ -787,15 +787,16 @@ export class Crystal {
       return this.searchLanceFallback(query, limit, filter);
     }
 
-    // Parse since filter into ISO date string
+    // Parse since/until filters into ISO date strings
     const sinceDate = filter?.since ? this.parseSince(filter.since) : undefined;
+    const untilDate = filter?.until ? this.parseSince(filter.until) : undefined;
 
     const [embedding] = await this.embed([query]);
     const fetchLimit = Math.max(limit * 5, 50);
 
     // Run FTS and vector search, then fuse with RRF. BM25 gets 2x weight.
-    const vecResults = this.searchVec(embedding, fetchLimit, { ...filter, sinceDate });
-    const ftsResults = this.searchFTS(query, fetchLimit, { ...filter, sinceDate });
+    const vecResults = this.searchVec(embedding, fetchLimit, { ...filter, sinceDate, untilDate });
+    const ftsResults = this.searchFTS(query, fetchLimit, { ...filter, sinceDate, untilDate });
     const fused = this.reciprocalRankFusion([ftsResults, vecResults], [2.0, 1.0]);
 
     // Apply recency weighting on top of fused scores
@@ -821,17 +822,18 @@ export class Crystal {
   /** Deep search: query expansion + LLM re-ranking + position-aware blending.
    *  Falls back to standard search if no LLM provider is available.
    *  Supports intent disambiguation, candidateLimit tuning, and explain traces. */
-  async deepSearch(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string }, options?: { intent?: string; candidateLimit?: number; explain?: boolean }): Promise<SearchResult[]> {
+  async deepSearch(query: string, limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string; until?: string }, options?: { intent?: string; candidateLimit?: number; explain?: boolean }): Promise<SearchResult[]> {
     const { deepSearch: deepSearchFn } = await import('./search-pipeline.js');
     return deepSearchFn(this, query, { limit, filter, ...options });
   }
 
   /** Structured search: pass pre-expanded queries to skip LLM expansion.
    *  Each query is typed (lex, vec, hyde) and searched independently, then fused with RRF. */
-  async structuredSearch(queries: StructuredQuery[], limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string }): Promise<SearchResult[]> {
+  async structuredSearch(queries: StructuredQuery[], limit = 5, filter?: { agent_id?: string; source_type?: string; since?: string; until?: string }): Promise<SearchResult[]> {
     const db = this.sqliteDb!;
     const sinceDate = filter?.since ? this.parseSince(filter.since) : undefined;
-    const internalFilter = { ...filter, sinceDate };
+    const untilDate = filter?.until ? this.parseSince(filter.until) : undefined;
+    const internalFilter = { ...filter, sinceDate, untilDate };
     const allResultLists: SearchResult[][] = [];
 
     for (const q of queries) {
@@ -862,7 +864,7 @@ export class Crystal {
   }
 
   /** Vector search via sqlite-vec. Two-step pattern: MATCH first, then JOIN. */
-  private searchVec(embedding: number[], limit: number, filter?: { agent_id?: string; source_type?: string; sinceDate?: string }): SearchResult[] {
+  private searchVec(embedding: number[], limit: number, filter?: { agent_id?: string; source_type?: string; sinceDate?: string; untilDate?: string }): SearchResult[] {
     const db = this.sqliteDb!;
 
     if (!this.vecDimensions) return [];
@@ -888,6 +890,7 @@ export class Crystal {
     if (filter?.agent_id) { sql += ' AND agent_id = ?'; params.push(filter.agent_id); }
     if (filter?.source_type) { sql += ' AND source_type = ?'; params.push(filter.source_type); }
     if (filter?.sinceDate) { sql += ' AND created_at >= ?'; params.push(filter.sinceDate); }
+    if (filter?.untilDate) { sql += ' AND created_at < ?'; params.push(filter.untilDate); }
 
     const rows = db.prepare(sql).all(...params) as Array<{
       id: number; text: string; role: string; source_type: string;
@@ -906,7 +909,7 @@ export class Crystal {
   }
 
   /** Full-text search via FTS5 with BM25 scoring. */
-  private searchFTS(query: string, limit: number, filter?: { agent_id?: string; source_type?: string; sinceDate?: string }): SearchResult[] {
+  private searchFTS(query: string, limit: number, filter?: { agent_id?: string; source_type?: string; sinceDate?: string; untilDate?: string }): SearchResult[] {
     const db = this.sqliteDb!;
     const ftsQuery = this.buildFTS5Query(query);
     if (!ftsQuery) return [];
@@ -923,6 +926,7 @@ export class Crystal {
     if (filter?.agent_id) { sql += ' AND c.agent_id = ?'; params.push(filter.agent_id); }
     if (filter?.source_type) { sql += ' AND c.source_type = ?'; params.push(filter.source_type); }
     if (filter?.sinceDate) { sql += ' AND c.created_at >= ?'; params.push(filter.sinceDate); }
+    if (filter?.untilDate) { sql += ' AND c.created_at < ?'; params.push(filter.untilDate); }
 
     sql += ' ORDER BY bm25_score LIMIT ?';
     params.push(limit);
