@@ -1,6 +1,6 @@
 {
   "name": "@wipcomputer/memory-crystal",
-  "version": "0.7.32",
+  "version": "0.7.33",
   "description": "Sovereign memory system — local-first with ephemeral encrypted relay. Your memory, your machine, your rules.",
   "repository": {
     "type": "git",
@@ -17,7 +17,21 @@
     "crystal": "dist/cli.js",
     "crystal-mcp": "dist/mcp-server.js"
   },
+  "files": [
+    "dist/",
+    "scripts/",
+    "skills/",
+    "migrations/",
+    "cloud/",
+    "openclaw.plugin.json",
+    "SKILL.md",
+    "TECHNICAL.md",
+    "README.md",
+    "LICENSE",
+    "CLA.md"
+  ],
   "scripts": {
+    "prepublishOnly": "npm run build",
     "build": "tsup src/core.ts src/cli.ts src/mcp-server.ts src/openclaw.ts src/migrate.ts src/cc-hook.ts src/cc-poller.ts src/crypto.ts src/pair.ts src/poller.ts src/mirror-sync.ts src/file-sync.ts src/ldm.ts src/summarize.ts src/role.ts src/doctor.ts src/bridge.ts src/discover.ts src/bulk-copy.ts src/oc-backfill.ts src/dream-weaver.ts src/crystal-serve.ts src/staging.ts src/installer.ts --format esm --dts --outDir dist && tsup src/worker.ts --format esm --outDir dist --no-dts && cp scripts/crystal-capture.sh scripts/ldm-backup.sh dist/",
     "build:local": "tsup src/core.ts src/cli.ts src/mcp-server.ts src/openclaw.ts src/migrate.ts src/cc-hook.ts src/cc-poller.ts src/crypto.ts src/pair.ts src/poller.ts src/mirror-sync.ts src/file-sync.ts src/ldm.ts src/summarize.ts src/role.ts src/doctor.ts src/bridge.ts src/discover.ts src/bulk-copy.ts src/oc-backfill.ts src/dream-weaver.ts src/crystal-serve.ts src/staging.ts src/installer.ts --format esm --dts --outDir dist",
     "build:worker": "tsup src/worker.ts --format esm --outDir dist --no-dts",
