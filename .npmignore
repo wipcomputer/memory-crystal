@@ -27,3 +27,13 @@ wrangler.toml
 # Old/backup files
 README-old.md
 LETTERS.md
+
+# iCloud duplicate files (from Mar 24 iCloud exit)
+# These appear as "foo 2.ext" siblings of real files. Never ship them.
+**/* 2.sh
+**/* 2.ts
+**/* 2.js
+**/* 2.mjs
+**/* 2.md
+**/* 2.json
+**/* 2

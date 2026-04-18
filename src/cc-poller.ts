@@ -85,6 +85,7 @@ interface ExtractedMessage {
   text: string;
   timestamp: string;
   sessionId: string;
+  model?: string;
 }
 
 function extractMessages(filePath: string, lastByteOffset: number): {
@@ -132,6 +133,7 @@ function extractMessages(filePath: string, lastByteOffset: number): {
         text,
         timestamp: obj.timestamp || new Date().toISOString(),
         sessionId: obj.sessionId || 'unknown',
+        model: typeof msg.model === 'string' ? msg.model : undefined,
       });
     } catch {}
   }
@@ -331,6 +333,11 @@ function extractContentText(content: any): string {
 
 const BATCH_SIZE = 200;
 
+function isPermanentError(err: any): boolean {
+  const msg = String(err?.message || err || '').toLowerCase();
+  return msg.includes('api key required') || msg.includes('api key is required') || msg.includes('no llm provider') || msg.includes('no embedding provider') || msg.includes('no provider configured');
+}
+
 async function ingestLocal(messages: ExtractedMessage[], crystal: any): Promise<number> {
   const maxSingleChunkChars = 2000 * 4;
   const chunks: Chunk[] = [];
@@ -345,6 +352,7 @@ async function ingestLocal(messages: ExtractedMessage[], crystal: any): Promise<
         agent_id: CC_AGENT_ID,
         token_count: Math.ceil(msg.text.length / 4),
         created_at: msg.timestamp,
+        model_id: msg.model,
       });
     } else {
       for (const ct of crystal.chunkText(msg.text)) {
@@ -356,6 +364,7 @@ async function ingestLocal(messages: ExtractedMessage[], crystal: any): Promise<
           agent_id: CC_AGENT_ID,
           token_count: Math.ceil(ct.length / 4),
           created_at: msg.timestamp,
+          model_id: msg.model,
         });
       }
     }
@@ -370,6 +379,7 @@ async function ingestLocal(messages: ExtractedMessage[], crystal: any): Promise<
         total += await crystal.ingest(batch);
         break;
       } catch (err: any) {
+        if (isPermanentError(err)) throw err;
         retries++;
         if (retries >= 4) throw err;
         const delay = Math.min(1000 * 2 ** retries, 30000);

@@ -81,7 +81,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           text: { type: 'string', description: 'The fact or observation to remember' },
           category: {
             type: 'string',
-            enum: ['fact', 'preference', 'event', 'opinion', 'skill'],
+            enum: ['fact', 'preference', 'event', 'opinion', 'skill', 'user', 'feedback', 'project', 'reference'],
             description: 'Category of memory (default: fact)',
           },
         },

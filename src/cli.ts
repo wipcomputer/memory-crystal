@@ -14,7 +14,7 @@ crystal — Sovereign memory system
 
 Commands:
   crystal search <query> [-n limit] [--agent <id>] [--since <time>] [--until <date>] [--intent <context>] [--candidates <n>] [--explain] [--provider <openai|ollama|google>]
-  crystal remember <text> [--category fact|preference|event|opinion|skill]
+  crystal remember <text> [--category fact|preference|event|opinion|skill|user|feedback|project|reference]
   crystal forget <id>
   crystal status [--provider <openai|ollama|google>]
 

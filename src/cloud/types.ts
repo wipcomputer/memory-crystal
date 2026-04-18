@@ -16,7 +16,7 @@ export interface Env {
 
 // ── Memory Types (subset of core.ts) ──
 
-export type MemoryCategory = 'fact' | 'preference' | 'event' | 'opinion' | 'skill';
+export type MemoryCategory = 'fact' | 'preference' | 'event' | 'opinion' | 'skill' | 'user' | 'feedback' | 'project' | 'reference';
 
 // ── Encrypted Relay Payload (matches crypto.ts from memory-crystal) ──
 

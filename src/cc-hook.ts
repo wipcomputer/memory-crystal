@@ -24,9 +24,10 @@ import { loadRelayKey, encryptJSON } from './crypto.js';
 import { ensureLdm, ldmPaths, resolveStatePath, stateWritePath, getAgentId } from './ldm.js';
 import {
   readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync,
-  statSync, openSync, readSync, closeSync, copyFileSync,
+  statSync, openSync, readSync, closeSync, copyFileSync, readdirSync,
 } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 
 const CC_AGENT_ID = getAgentId('claude-code');
 const RELAY_URL = process.env.CRYSTAL_RELAY_URL || '';
@@ -34,6 +35,8 @@ const RELAY_TOKEN = process.env.CRYSTAL_RELAY_TOKEN || '';
 const PRIVATE_MODE_PATH = resolveStatePath('memory-capture-state.json');
 const WATERMARK_PATH = resolveStatePath('cc-capture-watermark.json');
 const CC_ENABLED_PATH = resolveStatePath('cc-capture-enabled.json');
+const MEMORY_SYNC_WATERMARK_PATH = resolveStatePath('cc-memory-sync-watermark.json');
+const CLAUDE_PROJECTS_DIR = join(process.env.HOME || '', '.claude', 'projects');
 
 // ── Mode detection ──
 
@@ -96,6 +99,179 @@ function saveWatermark(wm: Watermark): void {
   const writePath = stateWritePath('cc-capture-watermark.json');
   wm.lastRun = new Date().toISOString();
   writeFileSync(writePath, JSON.stringify(wm, null, 2));
+}
+
+// ── Memory file sync watermark ──
+
+interface MemorySyncWatermark {
+  files: Record<string, { hash: string; syncedAt: string }>;
+  lastRun: string | null;
+}
+
+function loadMemorySyncWatermark(): MemorySyncWatermark {
+  try {
+    if (existsSync(MEMORY_SYNC_WATERMARK_PATH)) {
+      return JSON.parse(readFileSync(MEMORY_SYNC_WATERMARK_PATH, 'utf-8'));
+    }
+  } catch {}
+  return { files: {}, lastRun: null };
+}
+
+function saveMemorySyncWatermark(wm: MemorySyncWatermark): void {
+  const writePath = stateWritePath('cc-memory-sync-watermark.json');
+  wm.lastRun = new Date().toISOString();
+  writeFileSync(writePath, JSON.stringify(wm, null, 2));
+}
+
+function hashFileContent(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+// ── YAML frontmatter parser (no external deps) ──
+
+interface MemoryFrontmatter {
+  name?: string;
+  description?: string;
+  type?: string;
+}
+
+function parseFrontmatter(content: string): { frontmatter: MemoryFrontmatter; body: string } {
+  const frontmatter: MemoryFrontmatter = {};
+
+  // Check for --- delimited YAML frontmatter
+  if (!content.startsWith('---')) {
+    return { frontmatter, body: content };
+  }
+
+  const endIdx = content.indexOf('---', 3);
+  if (endIdx === -1) {
+    return { frontmatter, body: content };
+  }
+
+  const yamlBlock = content.slice(3, endIdx).trim();
+  const body = content.slice(endIdx + 3).trim();
+
+  // Parse simple key: value pairs
+  for (const line of yamlBlock.split('\n')) {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx === -1) continue;
+    const key = line.slice(0, colonIdx).trim();
+    const value = line.slice(colonIdx + 1).trim();
+    if (key === 'name') frontmatter.name = value;
+    else if (key === 'description') frontmatter.description = value;
+    else if (key === 'type') frontmatter.type = value;
+  }
+
+  return { frontmatter, body };
+}
+
+// Valid CC memory categories (must match Memory['category'] in core.ts)
+const VALID_CATEGORIES = new Set([
+  'fact', 'preference', 'event', 'opinion', 'skill',
+  'user', 'feedback', 'project', 'reference',
+]);
+
+type MemoryCategory = 'fact' | 'preference' | 'event' | 'opinion' | 'skill' | 'user' | 'feedback' | 'project' | 'reference';
+
+// ── Memory file sync: scan and ingest CC auto-memory files ──
+
+function discoverMemoryFiles(): string[] {
+  const files: string[] = [];
+  try {
+    if (!existsSync(CLAUDE_PROJECTS_DIR)) return files;
+    for (const project of readdirSync(CLAUDE_PROJECTS_DIR)) {
+      const memDir = join(CLAUDE_PROJECTS_DIR, project, 'memory');
+      if (!existsSync(memDir)) continue;
+      try {
+        for (const file of readdirSync(memDir)) {
+          if (!file.endsWith('.md')) continue;
+          files.push(join(memDir, file));
+        }
+      } catch {} // Skip unreadable dirs
+    }
+  } catch {} // Skip if projects dir unreadable
+  return files;
+}
+
+async function syncMemoryFiles(): Promise<number> {
+  if (isPrivateMode()) return 0;
+
+  const files = discoverMemoryFiles();
+  if (files.length === 0) return 0;
+
+  const wm = loadMemorySyncWatermark();
+  const changed: Array<{ path: string; content: string; hash: string; frontmatter: MemoryFrontmatter; body: string }> = [];
+
+  for (const filePath of files) {
+    try {
+      const content = readFileSync(filePath, 'utf-8');
+      if (content.trim().length === 0) continue;
+
+      const hash = hashFileContent(content);
+
+      // Skip if unchanged since last sync
+      if (wm.files[filePath] && wm.files[filePath].hash === hash) continue;
+
+      const { frontmatter, body } = parseFrontmatter(content);
+      changed.push({ path: filePath, content, hash, frontmatter, body });
+    } catch {} // Skip unreadable files
+  }
+
+  if (changed.length === 0) {
+    saveMemorySyncWatermark(wm);
+    return 0;
+  }
+
+  // Local mode: use crystal.remember() directly
+  // Relay mode: not supported yet for memory files (only conversations)
+  const mode = getCaptureMode();
+  if (mode === 'relay') {
+    // For relay mode, just update watermarks so we don't re-process.
+    // Memory file relay support can be added later.
+    process.stderr.write(`[cc-memory-sync] skipping ${changed.length} files (relay mode not yet supported)\n`);
+    for (const item of changed) {
+      wm.files[item.path] = { hash: item.hash, syncedAt: new Date().toISOString() };
+    }
+    saveMemorySyncWatermark(wm);
+    return 0;
+  }
+
+  const config = resolveConfig();
+  const crystal = createCrystal(config);
+  await crystal.init();
+
+  let ingested = 0;
+  for (const item of changed) {
+    try {
+      // Determine category from frontmatter type, default to 'reference'
+      const rawType = item.frontmatter.type || 'reference';
+      const category: MemoryCategory = VALID_CATEGORIES.has(rawType) ? rawType as MemoryCategory : 'reference';
+
+      // Build the text to remember: include name/description for context
+      let text = '';
+      if (item.frontmatter.name) {
+        text += `[${item.frontmatter.name}] `;
+      }
+      if (item.body.length > 0) {
+        text += item.body;
+      } else {
+        text += item.content;
+      }
+
+      if (text.trim().length < 10) continue;
+
+      await crystal.remember(text.trim(), category);
+      ingested++;
+
+      // Update watermark for this file
+      wm.files[item.path] = { hash: item.hash, syncedAt: new Date().toISOString() };
+    } catch (err: any) {
+      process.stderr.write(`[cc-memory-sync] error ingesting ${basename(item.path)}: ${err.message}\n`);
+    }
+  }
+
+  saveMemorySyncWatermark(wm);
+  return ingested;
 }
 
 // ── JSONL parsing ──
@@ -303,6 +479,11 @@ export async function sendCommand(command: {
 
 const BATCH_SIZE = 200;
 
+function isPermanentError(err: any): boolean {
+  const msg = String(err?.message || err || '').toLowerCase();
+  return msg.includes('api key required') || msg.includes('api key is required') || msg.includes('no llm provider') || msg.includes('no embedding provider') || msg.includes('no provider configured');
+}
+
 async function ingestLocal(messages: ExtractedMessage[]): Promise<number> {
   const config = resolveConfig();
   const crystal = createCrystal(config);
@@ -348,6 +529,7 @@ async function ingestLocal(messages: ExtractedMessage[]): Promise<number> {
         total += await crystal.ingest(batch);
         break;
       } catch (err: any) {
+        if (isPermanentError(err)) throw err;
         retries++;
         if (retries >= 4) throw err;
         const delay = Math.min(1000 * 2 ** retries, 30000);
@@ -467,10 +649,24 @@ async function main(): Promise<void> {
       writeSummaryFile(paths.sessions, summary, CC_AGENT_ID, sessionId);
     } catch {} // Summary failure is non-fatal
 
+    // Sync CC auto-memory files into Crystal (non-fatal)
+    try {
+      const syncCount = await syncMemoryFiles();
+      if (syncCount > 0) {
+        process.stderr.write(`[cc-memory-sync] ingested ${syncCount} changed memory file(s)\n`);
+      }
+    } catch (err: any) {
+      process.stderr.write(`[cc-memory-sync] error: ${err.message}\n`);
+    }
+
     // Dev updates disabled (2026-02-28). Was auto-generating files in every repo's
     // ai/ folder after each session. Created noise, not signal. If we bring this back,
     // it should be opt-in per repo, not a blanket scan.
   } catch (err: any) {
+    if (isPermanentError(err)) {
+      process.stderr.write(`[cc-memory-capture] skipped: ${err.message} (ensure OP_SERVICE_ACCOUNT_TOKEN is in env or set OPENAI_API_KEY)\n`);
+      process.exit(0);
+    }
     process.stderr.write(`[cc-memory-capture] error: ${err.message}\n`);
     process.exit(1);
   }

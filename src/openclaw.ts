@@ -2,11 +2,11 @@
 // Thin layer calling core.ts via api.registerTool() and api.on().
 // Replaces context-embeddings plugin.
 
-import { Crystal, resolveConfig, type Chunk } from './core.js';
+import { Crystal, resolveConfig, type Chunk, type Memory } from './core.js';
 import { runDevUpdate } from './dev-update.js';
-import { resolveStatePath, ldmPaths, ensureLdm } from './ldm.js';
+import { resolveStatePath, stateWritePath, ldmPaths, ensureLdm } from './ldm.js';
 import {
-  existsSync, readFileSync, readdirSync, copyFileSync, statSync, mkdirSync,
+  existsSync, readFileSync, writeFileSync, readdirSync, copyFileSync, statSync, mkdirSync,
 } from 'node:fs';
 import { join, basename } from 'node:path';
 
@@ -107,6 +107,138 @@ function syncDirRecursive(srcDir: string, destDir: string, ext: string): void {
   }
 }
 
+// ── Workspace memory sync ──
+// After each agent_end, check if workspace .md files changed since last capture.
+// For changed files, ingest content into Crystal via remember().
+// Uses file mtime as watermark to avoid re-ingesting unchanged files.
+
+const WORKSPACE_WATERMARK_FILE = 'workspace-memory-watermarks.json';
+
+type WatermarkMap = Record<string, number>; // filePath -> mtimeMs
+
+function loadWatermarks(): WatermarkMap {
+  try {
+    const path = resolveStatePath(WORKSPACE_WATERMARK_FILE);
+    if (existsSync(path)) {
+      return JSON.parse(readFileSync(path, 'utf-8'));
+    }
+  } catch {
+    // corrupted or missing ... start fresh
+  }
+  return {};
+}
+
+function saveWatermarks(watermarks: WatermarkMap): void {
+  const path = stateWritePath(WORKSPACE_WATERMARK_FILE);
+  writeFileSync(path, JSON.stringify(watermarks, null, 2), 'utf-8');
+}
+
+/** Valid memory categories from the Memory interface. */
+const VALID_CATEGORIES: ReadonlySet<string> = new Set([
+  'fact', 'preference', 'event', 'opinion', 'skill',
+  'user', 'feedback', 'project', 'reference',
+]);
+
+/**
+ * Parse YAML frontmatter from markdown content.
+ * Looks for --- delimiters and extracts the `type` field.
+ * No external YAML parser needed... just splits on `---`.
+ */
+function parseFrontmatterType(content: string): Memory['category'] | null {
+  const trimmed = content.trimStart();
+  if (!trimmed.startsWith('---')) return null;
+
+  const endIdx = trimmed.indexOf('---', 3);
+  if (endIdx === -1) return null;
+
+  const frontmatter = trimmed.slice(3, endIdx);
+  // Find the type field in the frontmatter block
+  for (const line of frontmatter.split('\n')) {
+    const match = line.match(/^\s*type\s*:\s*(.+?)\s*$/);
+    if (match) {
+      const value = match[1].replace(/^["']|["']$/g, ''); // strip quotes
+      if (VALID_CATEGORIES.has(value)) {
+        return value as Memory['category'];
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Collect workspace memory files to check:
+ * ~/.openclaw/workspace/MEMORY.md and ~/.openclaw/workspace/memory/*.md
+ */
+function collectWorkspaceMemoryFiles(): string[] {
+  const HOME = process.env.HOME || '';
+  const workspaceDir = join(HOME, '.openclaw', 'workspace');
+  const files: string[] = [];
+
+  // Top-level MEMORY.md
+  const memoryMd = join(workspaceDir, 'MEMORY.md');
+  if (existsSync(memoryMd)) files.push(memoryMd);
+
+  // All .md files in workspace/memory/
+  const memoryDir = join(workspaceDir, 'memory');
+  if (existsSync(memoryDir)) {
+    for (const entry of readdirSync(memoryDir)) {
+      if (entry.endsWith('.md')) {
+        files.push(join(memoryDir, entry));
+      }
+    }
+  }
+
+  return files;
+}
+
+/**
+ * Sync changed workspace memory files into Crystal.
+ * Called from agent_end after conversation capture.
+ * Returns the number of files ingested.
+ */
+async function syncWorkspaceMemory(
+  crystal: Crystal,
+  agentId: string,
+  logger: any,
+): Promise<number> {
+  const watermarks = loadWatermarks();
+  const files = collectWorkspaceMemoryFiles();
+  let ingested = 0;
+
+  for (const filePath of files) {
+    try {
+      const stat = statSync(filePath);
+      const lastMtime = watermarks[filePath] || 0;
+
+      // Skip if file hasn't changed since last capture
+      if (stat.mtimeMs <= lastMtime) continue;
+
+      const content = readFileSync(filePath, 'utf-8');
+      if (!content || content.trim().length < 50) continue; // Skip near-empty files
+
+      // Determine category from frontmatter, default to 'fact'
+      const category = parseFrontmatterType(content) || 'fact';
+
+      // Ingest via remember() ... Crystal deduplicates internally via text_hash,
+      // but we use the mtime watermark to avoid unnecessary embedding API calls.
+      await crystal.remember(content, category);
+      ingested++;
+
+      // Update watermark for this file
+      watermarks[filePath] = stat.mtimeMs;
+    } catch (err: any) {
+      logger.warn(`memory-crystal: workspace sync skipped ${basename(filePath)}: ${err.message}`);
+    }
+  }
+
+  if (ingested > 0) {
+    saveWatermarks(watermarks);
+    logger.info(`memory-crystal: synced ${ingested} workspace memory file(s) to Crystal`);
+  }
+
+  return ingested;
+}
+
 export default {
   register(api: any) {
     const crystal = new Crystal(resolveConfig());
@@ -154,6 +286,7 @@ export default {
 
         const role = msg.role;
         if (role !== 'user' && role !== 'assistant') continue;
+        const model_id = typeof msg.model === 'string' ? msg.model : undefined;
 
         // Extract text from content (string or array)
         let text = '';
@@ -180,6 +313,7 @@ export default {
             agent_id: agentId,
             token_count: Math.ceil(text.length / 4),
             created_at: new Date().toISOString(),
+            model_id,
           });
         } else {
           // Very long message: chunk it, but preserve turn context
@@ -193,6 +327,7 @@ export default {
               agent_id: agentId,
               token_count: Math.ceil(chunkText.length / 4),
               created_at: new Date().toISOString(),
+              model_id,
             });
           }
         }
@@ -209,6 +344,13 @@ export default {
         api.logger.info(`memory-crystal: ingested ${count} chunks from ${sessionKey} (cycle ${state.captureCount + 1})`);
       } catch (err: any) {
         api.logger.error(`memory-crystal: ingest error: ${err.message}`);
+      }
+
+      // Workspace memory sync (non-blocking, non-fatal)
+      try {
+        await syncWorkspaceMemory(crystal, agentId, api.logger);
+      } catch (err: any) {
+        api.logger.warn(`memory-crystal: workspace memory sync failed (non-fatal): ${err.message}`);
       }
 
       // Raw data sync to LDM (non-blocking, non-fatal)
@@ -271,7 +413,7 @@ export default {
           type: 'object',
           properties: {
             text: { type: 'string', description: 'The fact to remember' },
-            category: { type: 'string', enum: ['fact', 'preference', 'event', 'opinion', 'skill'] },
+            category: { type: 'string', enum: ['fact', 'preference', 'event', 'opinion', 'skill', 'user', 'feedback', 'project', 'reference'] },
           },
           required: ['text'],
         },

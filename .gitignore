@@ -8,3 +8,6 @@ logs/
 .DS_Store
 _git-ignore/
 .wrangler/
+
+# Worktree directories (per CLAUDE.md convention)
+.worktrees/
