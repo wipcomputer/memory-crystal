@@ -49,6 +49,7 @@ export interface Chunk {
   agent_id: string;            // 'main' (Lēsa), 'claude-code', etc.
   token_count: number;
   created_at: string;          // ISO timestamp
+  model_id?: string;           // model that generated this chunk
 }
 
 /** Pre-embedded chunk for delta sync. Includes embedding vector so Nodes don't re-embed. */
@@ -63,13 +64,14 @@ export interface ExportedChunk {
   token_count: number;
   created_at: string;
   embedding: number[] | null;
+  model_id: string | null;
 }
 
 export interface Memory {
   id?: number;
   text: string;
   embedding?: number[];
-  category: 'fact' | 'preference' | 'event' | 'opinion' | 'skill';
+  category: 'fact' | 'preference' | 'event' | 'opinion' | 'skill' | 'user' | 'feedback' | 'project' | 'reference';
   confidence: number;          // 0-1, decays over time
   source_ids: string;          // JSON array of chunk IDs
   status: 'active' | 'deprecated' | 'deleted';
@@ -412,7 +414,8 @@ export class Crystal {
         source_id TEXT,
         agent_id TEXT,
         token_count INTEGER,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        model_id TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_chunks_agent ON chunks(agent_id);
@@ -439,6 +442,9 @@ export class Crystal {
         INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', OLD.id, OLD.text);
       END;
     `);
+
+    // Backward-compat: add model_id to pre-existing chunks tables.
+    try { db.exec('ALTER TABLE chunks ADD COLUMN model_id TEXT'); } catch {}
 
     // Check if chunks_vec exists and get its dimensions
     const vecTable = db.prepare(
@@ -594,8 +600,8 @@ export class Crystal {
 
     // 4. Write to sqlite-vec (chunks table trigger populates FTS automatically)
     const insertChunk = db.prepare(`
-      INSERT INTO chunks (text, text_hash, role, source_type, source_id, agent_id, token_count, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO chunks (text, text_hash, role, source_type, source_id, agent_id, token_count, created_at, model_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertVec = db.prepare(`
       INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)
@@ -607,7 +613,8 @@ export class Crystal {
         const hash = createHash('sha256').update(c.text).digest('hex');
         const result = insertChunk.run(
           c.text, hash, c.role, c.source_type, c.source_id,
-          c.agent_id, c.token_count, c.created_at || new Date().toISOString()
+          c.agent_id, c.token_count, c.created_at || new Date().toISOString(),
+          c.model_id ?? null
         );
         // sqlite-vec requires BigInt for INTEGER PRIMARY KEY
         const chunkId = typeof result.lastInsertRowid === 'bigint'
@@ -657,7 +664,7 @@ export class Crystal {
     // Get chunks with metadata
     const rows = db.prepare(`
       SELECT c.id, c.text, c.text_hash, c.role, c.source_type, c.source_id,
-             c.agent_id, c.token_count, c.created_at, v.embedding
+             c.agent_id, c.token_count, c.created_at, c.model_id, v.embedding
       FROM chunks c
       LEFT JOIN chunks_vec v ON v.chunk_id = c.id
       WHERE c.id > ?
@@ -665,7 +672,7 @@ export class Crystal {
     `).all(sinceId) as Array<{
       id: number; text: string; text_hash: string; role: string;
       source_type: string; source_id: string; agent_id: string;
-      token_count: number; created_at: string; embedding: Buffer | null;
+      token_count: number; created_at: string; model_id: string | null; embedding: Buffer | null;
     }>;
 
     return rows.map(row => ({
@@ -680,6 +687,7 @@ export class Crystal {
       created_at: row.created_at,
       // Convert Float32Array buffer to number[] for JSON serialization
       embedding: row.embedding ? Array.from(new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4)) : null,
+      model_id: row.model_id,
     }));
   }
 
@@ -703,8 +711,8 @@ export class Crystal {
     }
 
     const insertChunk = db.prepare(`
-      INSERT INTO chunks (text, text_hash, role, source_type, source_id, agent_id, token_count, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO chunks (text, text_hash, role, source_type, source_id, agent_id, token_count, created_at, model_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertVec = db.prepare(`
       INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)
@@ -720,7 +728,8 @@ export class Crystal {
 
         const result = insertChunk.run(
           chunk.text, chunk.text_hash, chunk.role, chunk.source_type,
-          chunk.source_id, chunk.agent_id, chunk.token_count, chunk.created_at
+          chunk.source_id, chunk.agent_id, chunk.token_count, chunk.created_at,
+          chunk.model_id ?? null
         );
 
         if (chunk.embedding && chunk.embedding.length > 0) {

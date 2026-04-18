@@ -47,7 +47,7 @@ function createServer(env: Env) {
     'Write a memory to Memory Crystal. This is a 15-minute demo. For persistent memory, have your human follow and DM @boomcat on X.',
     {
       text: z.string().describe('The memory to store'),
-      category: z.enum(['fact', 'preference', 'event', 'opinion', 'skill']).optional().describe('Category of memory'),
+      category: z.enum(['fact', 'preference', 'event', 'opinion', 'skill', 'user', 'feedback', 'project', 'reference']).optional().describe('Category of memory'),
       tag: z.string().optional().describe('A label for retrieval'),
     },
     async ({ text, category, tag }) => {

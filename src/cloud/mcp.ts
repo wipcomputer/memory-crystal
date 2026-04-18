@@ -35,7 +35,7 @@ export const TOOLS = [
         text: { type: 'string', description: 'The fact or observation to remember' },
         category: {
           type: 'string',
-          enum: ['fact', 'preference', 'event', 'opinion', 'skill'],
+          enum: ['fact', 'preference', 'event', 'opinion', 'skill', 'user', 'feedback', 'project', 'reference'],
           description: 'Category of memory (default: fact)',
         },
       },
@@ -251,7 +251,7 @@ async function handleRemember(args: Record<string, unknown>, ctx: ToolCallContex
   }
 
   const category = (args.category as MemoryCategory) || 'fact';
-  const validCategories: MemoryCategory[] = ['fact', 'preference', 'event', 'opinion', 'skill'];
+  const validCategories: MemoryCategory[] = ['fact', 'preference', 'event', 'opinion', 'skill', 'user', 'feedback', 'project', 'reference'];
   if (!validCategories.includes(category)) {
     return { content: [{ type: 'text', text: `Invalid category. Use: ${validCategories.join(', ')}` }], isError: true };
   }
